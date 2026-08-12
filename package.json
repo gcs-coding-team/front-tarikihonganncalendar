@@ -1,0 +1,13 @@
+{
+  "name": "front-tarikihonganncalendar",
+  "private": true,
+  "description": "他力本願カレンダー — フロントエンド",
+  "scripts": {
+    "test": "node tests/offline.test.js",
+    "test:server": "node tests/server.test.js && node tests/auth.test.js",
+    "serve": "node dev-server.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

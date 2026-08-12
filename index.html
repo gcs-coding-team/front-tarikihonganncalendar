@@ -384,6 +384,14 @@ label.f{font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;
 .toggle{display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; cursor:pointer;}
 .toggle input{width:17px; height:17px; accent-color:var(--hanko); margin:0;}
 
+/* saved handouts */
+.print-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:6px;}
+.print-thumb{
+  padding:0; border:1px solid var(--line); border-radius:2px; background:var(--white);
+  aspect-ratio:1; overflow:hidden; cursor:pointer;
+}
+.print-thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+
 /* keyboard focus */
 button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
 .cal-day:focus-visible, .card:focus-visible{
@@ -568,6 +576,37 @@ async function apiBinary(method, path, body){
   return json?.data;
 }
 
+// 読み取ったプリントの一覧。描画のたびに引かず、一度取ったら使い回す。
+let printsLoading = false;
+async function loadPrints(){
+  if(!ONLINE || printsLoading || sess.prints) return;
+  printsLoading = true;
+  try{
+    sess.prints = await api('GET','/prints');
+    if(sess.tab==='print' && !sess.printFlow) render();
+  }catch(e){ sess.prints = []; }
+  finally{ printsLoading = false; }
+}
+
+// 画像の口はトークンを要る。<img src> はヘッダーを送れないので、こちらで
+// 取ってきて object URL に差し替える。一度取ったものは使い回す。
+const printImages = new Map();
+async function fillPrintImages(){
+  for(const img of document.querySelectorAll('img[data-src]')){
+    const id = img.dataset.src;
+    if(printImages.has(id)){ img.src = printImages.get(id); continue; }
+    try{
+      const res = await fetch(`${API_BASE}/prints/${id}/image`, {
+        headers: AUTH.token ? {'Authorization':'Bearer '+AUTH.token} : {},
+      });
+      if(!res.ok) continue;
+      const url = URL.createObjectURL(await res.blob());
+      printImages.set(id, url);
+      img.src = url;
+    }catch(e){ /* 出せないだけなので、画面は壊さない */ }
+  }
+}
+
 async function probeServer(){
   try{
     const res = await fetch(API_ORIGIN + '/healthz', {method:'GET'});
@@ -660,7 +699,7 @@ const Server = {
       id:c.id, name:c.name, description:c.description||'',
       inviteCode:c.inviteCode||'', ownerId:c.ownerUserId,
       members: (await api('GET',`/colonies/${c.id}/members`).catch(()=>[]) || [])
-                 .map(m=>({id:m.userId, name:m.userId, role:m.role})),
+                 .map(m=>({id:m.userId, name:m.displayName || m.userId, role:m.role})),
       feed: (await api('GET',`/colonies/${c.id}/feed`).catch(()=>[]) || [])
                  .map(f=>({sourceType:f.sourceType==='TASK'?'task':'event', sourceId:f.sourceId,
                            titleSnapshot:f.titleSnapshot||'(タイトルなし)', by:f.createdBy, date:''})),
@@ -808,7 +847,7 @@ function render(){
   else if(sess.tab==='tt') html = renderTimetable();
   else if(sess.tab==='task') html = renderTasks();
   else if(sess.tab==='proj') html = renderProjects();
-  else if(sess.tab==='print') html = renderPrint();
+  else if(sess.tab==='print'){ html = renderPrint(); loadPrints(); }
   else if(sess.tab==='colony') html = renderColony();
   else if(sess.tab==='settings') html = renderSettings();
   else if(sess.tab==='search') html = renderSearch();
@@ -816,6 +855,7 @@ function render(){
   main.innerHTML = html;
   bindScreen();
   renderModal();
+  fillPrintImages();
 }
 
 /* ============ LOGIN ============ */
@@ -823,6 +863,8 @@ function renderLogin(){
   // サーバーがいるならメールとパスワードで入る。いないときは端末内だけの
   // 「おためし」で、名前だけで始められる。
   const mode = sess.loginMode || 'login';
+  if(ONLINE && mode==='forgot')  return renderForgot();
+  if(ONLINE && mode==='confirm') return renderResetConfirm();
   if(!ONLINE){
     return `
   <div style="padding:60px 30px 30px; display:flex; flex-direction:column; height:844px;">
@@ -864,16 +906,100 @@ function renderLogin(){
       </div>
       <div class="item-sub" id="li-error" style="color:var(--danger); min-height:18px; margin-bottom:10px;"></div>
       <button class="btn hanko" id="li-btn">${mode==='register'?'アカウントを作る':'ログイン'}</button>
+      ${mode==='login' ? `<button class="link-btn" id="li-forgot" style="width:100%; text-align:center; margin-top:10px;">パスワードを忘れた</button>` : ''}
     </div>
     <div style="text-align:center; font-size:10px; color:var(--ink-soft);">サーバーに接続しています</div>
   </div>`;
 }
+// 再設定の申し込み。登録の有無にかかわらず同じ文面を出す。
+// 「そのメールは登録されていません」と返すと、誰が使っているか調べられてしまう。
+function renderForgot(){
+  return `
+  <div style="padding:56px 30px 30px; display:flex; flex-direction:column; height:844px;">
+    <div style="flex:1;">
+      <div style="font-family:'Shippori Mincho',serif; font-size:22px; font-weight:800; margin-bottom:8px;">パスワードの再設定</div>
+      <div style="color:var(--ink-soft); font-size:13px; margin-bottom:24px; line-height:1.7;">
+        登録したメールアドレスを入れてください。<br>再設定用のコードをお送りします。
+      </div>
+      <div class="field">
+        <label class="f">メールアドレス</label>
+        <input type="text" id="li-email" placeholder="you@example.com" inputmode="email">
+      </div>
+      <div class="item-sub" id="li-error" style="min-height:18px; margin-bottom:10px;"></div>
+      <button class="btn hanko" id="li-send">送る</button>
+      <button class="link-btn" id="li-back" style="width:100%; text-align:center; margin-top:12px;">ログインに戻る</button>
+    </div>
+  </div>`;
+}
+
+function renderResetConfirm(){
+  return `
+  <div style="padding:56px 30px 30px; display:flex; flex-direction:column; height:844px;">
+    <div style="flex:1;">
+      <div style="font-family:'Shippori Mincho',serif; font-size:22px; font-weight:800; margin-bottom:8px;">新しいパスワード</div>
+      <div style="color:var(--ink-soft); font-size:13px; margin-bottom:24px; line-height:1.7;">
+        受け取ったコードと、新しいパスワードを入れてください。
+      </div>
+      <div class="field">
+        <label class="f">再設定コード</label>
+        <input type="text" id="li-token" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="f">新しいパスワード（8文字以上）</label>
+        <input type="password" id="li-pass" autocomplete="new-password">
+      </div>
+      <div class="item-sub" id="li-error" style="color:var(--danger); min-height:18px; margin-bottom:10px;"></div>
+      <button class="btn hanko" id="li-reset">設定する</button>
+      <button class="link-btn" id="li-back" style="width:100%; text-align:center; margin-top:12px;">ログインに戻る</button>
+    </div>
+  </div>`;
+}
+
 function bindLogin(){
+  const forgot = document.getElementById('li-forgot');
+  if(forgot) forgot.onclick = ()=>{ sess.loginMode='forgot'; render(); };
+  const back = document.getElementById('li-back');
+  if(back) back.onclick = ()=>{ sess.loginMode='login'; render(); };
+
+  const send = document.getElementById('li-send');
+  if(send) send.onclick = async ()=>{
+    const email = document.getElementById('li-email').value.trim();
+    const note = document.getElementById('li-error');
+    if(!email){ note.style.color='var(--danger)'; note.textContent='メールアドレスを入れてください'; return; }
+    try{ await api('POST','/auth/password-reset', {email}); }
+    catch(e){ note.style.color='var(--danger)'; note.textContent='サーバーに繋がりませんでした'; return; }
+    // 登録が無くても同じ文面。ここで違いを出すと、アカウントの有無が漏れる。
+    note.style.color='var(--ink-soft)';
+    note.textContent='そのアドレスに登録があれば、コードを送りました。';
+    sess.loginMode='confirm';
+    setTimeout(()=>{ render(); toast('コードを入れてください'); }, 900);
+  };
+
+  const reset = document.getElementById('li-reset');
+  if(reset) reset.onclick = async ()=>{
+    const token = document.getElementById('li-token').value.trim();
+    const pass  = document.getElementById('li-pass').value;
+    const fail  = (m)=>{ document.getElementById('li-error').textContent = m; };
+    if(!token){ fail('コードを入れてください'); return; }
+    if(pass.length < 8){ fail('パスワードは8文字以上にしてください'); return; }
+    try{
+      await api('POST','/auth/password-reset/confirm', {token, password:pass});
+    }catch(e){
+      fail(e.code==='INVALID_TOKEN'
+        ? 'コードが違うか、期限が切れています'
+        : 'パスワードの形式を確かめてください');
+      return;
+    }
+    sess.loginMode='login'; render(); toast('新しいパスワードで入れます');
+  };
+
   document.querySelectorAll('[data-mode]').forEach(el=>{
     el.onclick = ()=>{ sess.loginMode = el.dataset.mode; render(); };
   });
 
-  document.getElementById('li-btn').onclick = async ()=>{
+  const loginBtn = document.getElementById('li-btn');
+  if(!loginBtn) return;   // 再設定の画面にはこのボタンが無い
+  loginBtn.onclick = async ()=>{
     if(ONLINE){
       const mode  = sess.loginMode || 'login';
       const email = document.getElementById('li-email').value.trim();
@@ -1200,11 +1326,13 @@ function renderPrint(){
         <div style="font-size:11px; margin-top:4px;">JPEG・PNG　最大10MB</div>
       </div>
       <input type="file" id="fileInput" accept="image/*" style="display:none;">
-      <div class="section-label">取り込み履歴</div>
-      ${DB.tasks.filter(t=>t.ai).length===0 && DB.events.filter(e=>e.sourcePrintId).length===0
-        ? emptyState('まだAI取り込みの実績がありません')
-        : (DB.tasks.filter(t=>t.ai).map(taskCard).join('') + DB.events.filter(e=>e.sourcePrintId).map(evCard).join(''))
-      }
+      <div class="section-label">読み取ったプリント</div>
+      ${(sess.prints||[]).length
+        ? `<div class="print-grid">` + sess.prints.map(p=>`
+            <button class="print-thumb" data-print="${p.id}" title="${esc(p.filename||'')}">
+              <img data-src="${p.id}" alt="${esc(p.filename||'プリント')}">
+            </button>`).join('') + `</div>`
+        : emptyState('まだ読み取ったプリントがありません')}
     `;
   }
   if(flow.step==='preview'){
@@ -1305,6 +1433,7 @@ async function runAnalysis(){
       render();
       return;
     }
+    sess.prints = null;   // 新しく1枚増えたので取り直す
     sess.printFlow = {
       ...sess.printFlow, step:'review',
       candidates: (out.candidates||[]).map(c=>({...c, include:true})),
@@ -1410,6 +1539,7 @@ function renderModal(){
   root.appendChild(div);
   div.addEventListener('click', e=>{ if(e.target===div){ sess.modal=null; render(); } });
   bindModal();
+  fillPrintImages();
 }
 function modalContent(){
   const m = sess.modal;
@@ -1517,6 +1647,13 @@ function modalContent(){
           : 'サーバーに繋がっていないので、参加できるのはこの端末にあるコロニーだけです。'}
       </div>
       <button class="btn hanko" id="m-save">参加する</button>
+    `;
+  }
+  if(m.kind==='print'){
+    return `
+      <h3>${esc(m.data.filename||'プリント')}</h3>
+      <img class="preview-img" data-src="${m.data.id}" style="max-height:none;">
+      <div class="item-sub">読み取り日：${esc((m.data.createdAt||'').slice(0,10))}</div>
     `;
   }
   if(m.kind==='pickTask'){
@@ -1655,6 +1792,13 @@ function bindScreen(){
   };
 
   // print flow
+  document.querySelectorAll('[data-print]').forEach(el=>{
+    el.onclick = ()=>{
+      const p = (sess.prints||[]).find(x=>x.id===el.dataset.print);
+      if(p){ sess.modal = {kind:'print', data:p}; renderModal(); }
+    };
+  });
+
   const dz = document.getElementById('dropzone');
   const fi = document.getElementById('fileInput');
   if(dz) dz.onclick = ()=> fi.click();

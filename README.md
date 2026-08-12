@@ -62,6 +62,19 @@ FRONTEND_ORIGIN=http://localhost:3100 go run .    # API 側
 確認画面に出るだけで、そのままカレンダーには入らない。読めなかった行は捨てる
 （推測で日付を埋めない）。モデルに繋がらないときは、その旨を出して終わる。
 
+画像はサーバーに残るので、プリントタブから見返せる。画像の口はトークンを要り、
+`<img src>` はヘッダーを送れないので、取得してから object URL に差し替えている。
+
+## テスト
+
+`tests/` にある。詳しくは [tests/README.md](tests/README.md)。
+
+```bash
+npm install
+npm test              # サーバー不要（39項目）
+npm run test:server   # API を立ててから（27 + 37項目）
+```
+
 ## 表示するときに組み立てているもの
 
 保存はせず、表示のたびに `eventsForDate()` が組み立てる。
