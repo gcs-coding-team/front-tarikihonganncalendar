@@ -315,6 +315,83 @@ label.f{font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;
 /* project progress */
 .progress-track{height:5px; background:var(--paper-2); border-radius:3px; overflow:hidden; margin-top:8px;}
 .progress-fill{height:100%; background:var(--pen-blue); border-radius:3px;}
+
+/* header right side */
+.title-right{display:flex; align-items:center; gap:10px;}
+.icon-btn{
+  background:none; border:none; padding:0; cursor:pointer; display:flex;
+  width:22px; height:22px; color:var(--ink-soft);
+}
+.icon-btn svg{width:22px; height:22px; stroke:currentColor; fill:none;}
+.icon-btn.on{color:var(--hanko);}
+
+/* month / week / day switch */
+.viewswitch{display:flex; gap:0; border:1px solid var(--line); border-radius:2px; overflow:hidden; margin-bottom:12px;}
+.viewswitch-btn{
+  flex:1; padding:7px 0; border:none; background:var(--white); cursor:pointer;
+  font-family:'Zen Kaku Gothic New',sans-serif; font-size:12px; font-weight:700; color:var(--ink-soft);
+  border-right:1px solid var(--line);
+}
+.viewswitch-btn:last-child{border-right:none;}
+.viewswitch-btn.on{background:var(--ink); color:var(--white);}
+
+/* due-soon panel */
+.due-panel{border:1px solid var(--hanko); border-radius:var(--radius); padding:10px 12px; margin-bottom:14px; background:var(--white);}
+.due-head{font-size:11px; font-weight:700; color:var(--hanko); margin-bottom:6px; letter-spacing:.04em;}
+.due-row{display:flex; gap:8px; align-items:baseline; padding:4px 0; cursor:pointer; border-top:1px dashed var(--line);}
+.due-row:first-of-type{border-top:none;}
+.due-when{font-size:10px; font-weight:700; color:var(--pen-blue); flex-shrink:0; min-width:52px;}
+.due-row.late .due-when{color:var(--danger);}
+.due-title{font-size:13px; font-weight:500; line-height:1.4;}
+
+/* overdue tasks */
+.card.overdue::after{background:var(--danger);}
+.chip.late{color:var(--danger); border-color:var(--danger);}
+.late-text{color:var(--danger); font-weight:700;}
+
+/* lessons pulled in from the timetable */
+.card.lesson{background:var(--paper-2);}
+.card.lesson::after{background:var(--sage); opacity:.4;}
+.chip.lesson{color:var(--sage); border-color:var(--sage);}
+
+/* week view */
+.week-day{margin-bottom:14px;}
+.week-head{
+  font-size:12px; font-weight:700; color:var(--ink-soft); padding:4px 0 6px;
+  border-bottom:1px dashed var(--line); margin-bottom:8px; cursor:pointer;
+}
+.week-day.today .week-head{color:var(--hanko);}
+.week-none{font-size:12px; color:var(--line); padding:2px 0 6px;}
+
+/* day view */
+.hour-grid{display:grid; grid-template-columns:34px 1fr; gap:0 8px;}
+.hour-label{
+  font-size:10px; color:var(--ink-soft); text-align:right; padding-top:6px;
+  font-variant-numeric:tabular-nums; border-top:1px dashed var(--line);
+}
+.hour-slot{min-height:36px; padding-top:6px; border-top:1px dashed var(--line);}
+
+/* search filters */
+.filter-row{display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap;}
+.filter-chip{
+  font-family:'Zen Kaku Gothic New',sans-serif; font-size:11px; font-weight:700;
+  padding:5px 11px; border-radius:2px; border:1px solid var(--line);
+  background:var(--white); color:var(--ink-soft); cursor:pointer;
+}
+.filter-chip.on{background:var(--ink); border-color:var(--ink); color:var(--white);}
+
+/* checkbox row */
+.toggle{display:flex; align-items:center; gap:8px; font-size:13px; font-weight:700; cursor:pointer;}
+.toggle input{width:17px; height:17px; accent-color:var(--hanko); margin:0;}
+
+/* keyboard focus */
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible,
+.cal-day:focus-visible, .card:focus-visible{
+  outline:2px solid var(--pen-blue); outline-offset:2px;
+}
+@media (prefers-reduced-motion: reduce){
+  *{animation-duration:.01ms !important; transition-duration:.01ms !important;}
+}
 </style>
 </head>
 <body>
@@ -322,7 +399,13 @@ label.f{font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;
 <div class="frame" id="frame">
   <div class="topbar">
     <div class="brand">他力本願カレンダー <small id="userTag"></small></div>
-    <div class="screen-title"><span id="screenTitle">カレンダー</span><span class="idx" id="screenIdx">1</span></div>
+    <div class="screen-title">
+      <span id="screenTitle">カレンダー</span>
+      <span class="title-right">
+        <button class="icon-btn" id="searchBtn" aria-label="検索"></button>
+        <span class="idx" id="screenIdx">1</span>
+      </span>
+    </div>
   </div>
   <div class="main" id="main"></div>
   <div class="tabbar" id="tabbar"></div>
@@ -344,15 +427,82 @@ const ICONS = {
   photo: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5.5-5.5a1.5 1.5 0 0 0-2.1 0L4 19"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.6c0-.6.5-1.1 1.1-1.1h3.8c.6 0 1.1.5 1.1 1.1V7M18 7l-.8 12.2A2 2 0 0 1 15.2 21H8.8a2 2 0 0 1-2-1.8L6 7"/></svg>`,
   folder: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.6a1.6 1.6 0 0 1 1.6-1.6h4.3l2.1 2.3h7.4a1.6 1.6 0 0 1 1.6 1.6v8.9a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6V6.6z"/></svg>`,
+  search: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.3"/><path d="M15.6 15.6L20.5 20.5"/></svg>`,
 };
 
 /* ============ STATE ============ */
 let DB = { events:[], tasks:[], timetable:[], colonies:[], projects:[], user:null };
-let sess = { tab:'cal', selectedDate: todayStr(), calMonth:new Date(), modal:null, printFlow:null };
+let sess = { tab:'cal', selectedDate: todayStr(), calMonth:new Date(), calView:'month', modal:null, printFlow:null, query:'' };
 
 function uid(){ return 'id_'+Math.random().toString(36).slice(2,10); }
-function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
-function fmtDate(s){ const d=new Date(s+'T00:00:00'); return `${d.getMonth()+1}/${d.getDate()}(${['日','月','火','水','木','金','土'][d.getDay()]})`; }
+
+/* ============ DATES ============ */
+// toISOString() は UTC 基準なので、日本時間だと朝 9 時前に前日の日付が返る。
+// 「今日」がずれると期限の判定まで巻き添えになるので、端末のローカル日付で扱う。
+function ymd(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+function todayStr(){ return ymd(new Date()); }
+function parseDate(s){ return new Date(s+'T00:00:00'); }
+function addDays(s,n){ const d=parseDate(s); d.setDate(d.getDate()+n); return ymd(d); }
+const DOW_JP = ['日','月','火','水','木','金','土'];
+function fmtDate(s){ const d=parseDate(s); return `${d.getMonth()+1}/${d.getDate()}(${DOW_JP[d.getDay()]})`; }
+
+/* ============ 予定の組み立て ============ */
+// カレンダーに出る予定は3種類ある。手で入れた単発の予定、繰り返しのその日の分、
+// そして時間割から導いた授業。授業と繰り返しは実データとして増やさず、
+// 表示するときに毎回組み立てる（同じ予定が二重に増えるのを避けるため）。
+
+// 各限の開始時刻。学校ごとに違うので、変えるならここだけ直せばよい。
+const PERIOD_START = {1:'08:50', 2:'09:50', 3:'10:50', 4:'11:50', 5:'13:30', 6:'14:30'};
+
+// 繰り返し予定がその日に発生するか。初回の日も対象に含む。
+function repeatsOn(ev, dateStr){
+  const r = ev.repeat;
+  if(!r) return false;
+  const start = ev.startAt.slice(0,10);
+  if(dateStr < start) return false;
+  if(r.until && dateStr > r.until) return false;
+  if((ev.exdates||[]).includes(dateStr)) return false;   // この回だけ消された
+  const a = parseDate(start), b = parseDate(dateStr);
+  if(r.freq==='daily')   return true;
+  if(r.freq==='weekly')  return a.getDay()  === b.getDay();
+  if(r.freq==='monthly') return a.getDate() === b.getDate();
+  return false;
+}
+// 繰り返しの1回分。元の予定と区別できるよう occurrenceDate を持たせる。
+function occurrenceOf(ev, dateStr){
+  return {...ev, occurrenceDate:dateStr, startAt: dateStr + ev.startAt.slice(10)};
+}
+// 時間割は dayOfWeek が 1=月〜6=土 で、Date#getDay() とそのまま一致する。
+// 日曜は該当するコマが無いので自然に空になる。
+function timetableEventsFor(dateStr){
+  const dow = parseDate(dateStr).getDay();
+  return DB.timetable.filter(e=>e.dayOfWeek===dow).map(e=>({
+    id: 'tt_'+e.id+'_'+dateStr,
+    title: e.subject,
+    description: [e.room, e.teacher].filter(Boolean).join('・'),
+    startAt: dateStr+'T'+(PERIOD_START[e.period] || '08:50'),
+    allDay: false,
+    source: 'timetable',
+    period: e.period,
+    readOnly: true,
+  }));
+}
+// その日に出るものを全部集めて、終日を先頭に、あとは時刻順で返す。
+function eventsForDate(dateStr){
+  const out = [];
+  DB.events.forEach(ev=>{
+    if(ev.repeat){
+      if(repeatsOn(ev, dateStr)) out.push(occurrenceOf(ev, dateStr));
+    }else if(ev.startAt.slice(0,10)===dateStr){
+      out.push(ev);
+    }
+  });
+  out.push(...timetableEventsFor(dateStr));
+  return out.sort((a,b)=>
+    (b.allDay?1:0)-(a.allDay?1:0) || a.startAt.localeCompare(b.startAt));
+}
 
 async function loadAll(){
   const keys = ['events','tasks','timetable','colonies','projects','user'];
@@ -392,14 +542,15 @@ function seedIfEmpty(){
       {id:uid(), title:'看板デザイン案の提出', description:'クラス企画用', dueAt:t, status:'OPEN', ai:false, projectId:DB.projects[0].id},
     ];
     DB.events = [
-      {id:uid(), title:'部活 全体練習', description:'体育館', startAt:t+'T16:00', allDay:false, sourcePrintId:null},
+      {id:uid(), title:'部活 全体練習', description:'体育館', startAt:t+'T16:00', allDay:false,
+       repeat:{freq:'weekly', until:null}, exdates:[], sourcePrintId:null},
     ];
   }
 }
 
 /* ============ RENDER ROOT ============ */
-const TITLES = { cal:'カレンダー', tt:'時間割', task:'タスク一覧', proj:'プロジェクト', print:'プリント取込', colony:'コロニー', settings:'設定' };
-const IDXMAP = { cal:'1', tt:'2', task:'3', proj:'4', print:'5', colony:'6', settings:'7' };
+const TITLES = { cal:'カレンダー', tt:'時間割', task:'タスク一覧', proj:'プロジェクト', print:'プリント取込', colony:'コロニー', settings:'設定', search:'検索' };
+const IDXMAP = { cal:'1', tt:'2', task:'3', proj:'4', print:'5', colony:'6', settings:'7', search:'?' };
 const TABS = [
   {k:'cal', icon:ICONS.cal, label:'カレンダー'},
   {k:'tt', icon:ICONS.grid, label:'時間割'},
@@ -438,6 +589,17 @@ function render(){
     </button>`).join('');
   tabbar.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ sess.tab=b.dataset.tab; sess.modal=null; render(); });
 
+  const searchBtn = document.getElementById('searchBtn');
+  searchBtn.innerHTML = ICONS.search;
+  searchBtn.classList.toggle('on', sess.tab==='search');
+  searchBtn.onclick = ()=>{
+    sess.tab = sess.tab==='search' ? 'cal' : 'search';
+    sess.modal = null;
+    render();
+    const q = document.getElementById('searchInput');
+    if(q) q.focus();
+  };
+
   let html = '';
   if(sess.tab==='cal') html = renderCalendar();
   else if(sess.tab==='tt') html = renderTimetable();
@@ -446,6 +608,7 @@ function render(){
   else if(sess.tab==='print') html = renderPrint();
   else if(sess.tab==='colony') html = renderColony();
   else if(sess.tab==='settings') html = renderSettings();
+  else if(sess.tab==='search') html = renderSearch();
 
   main.innerHTML = html;
   bindScreen();
@@ -486,52 +649,138 @@ function bindLogin(){
 }
 
 /* ============ CALENDAR ============ */
+const CAL_VIEWS = [{k:'month',label:'月'},{k:'week',label:'週'},{k:'day',label:'日'}];
+
 function renderCalendar(){
+  const view = sess.calView;
+  const body = view==='week' ? renderWeekView()
+             : view==='day'  ? renderDayView()
+             : renderMonthView();
+  return `
+    <div class="viewswitch">
+      ${CAL_VIEWS.map(v=>`<button class="viewswitch-btn ${view===v.k?'on':''}" data-view="${v.k}">${v.label}</button>`).join('')}
+    </div>
+    ${renderDueSummary()}
+    ${body}
+    <button class="fab" id="addEventFab">${ICONS.plus}</button>
+  `;
+}
+
+// 期限が今日・明日のタスクと、過ぎてしまったタスクを画面の先頭に出す。
+// アプリを開いた人が最初に見る場所なので、ここに無いものは気付かれない。
+function renderDueSummary(){
+  const today = todayStr(), tomorrow = addDays(today,1);
+  const open = DB.tasks.filter(t=>t.status==='OPEN' && t.dueAt);
+  const overdue = open.filter(t=>t.dueAt <  today).sort((a,b)=>a.dueAt.localeCompare(b.dueAt));
+  const soon    = open.filter(t=>t.dueAt === today || t.dueAt === tomorrow)
+                      .sort((a,b)=>a.dueAt.localeCompare(b.dueAt));
+  if(!overdue.length && !soon.length) return '';
+  const line = (t)=>{
+    const late = t.dueAt < today;
+    const when = t.dueAt===today ? '今日' : t.dueAt===tomorrow ? '明日'
+               : `${-diffDays(today,t.dueAt)}日超過`;
+    return `<div class="due-row ${late?'late':''}" data-task="${t.id}">
+      <span class="due-when">${when}</span>
+      <span class="due-title">${esc(t.title)}</span>
+    </div>`;
+  };
+  return `
+    <div class="due-panel">
+      <div class="due-head">${overdue.length? `期限切れ ${overdue.length} 件・`:''}まもなく ${soon.length} 件</div>
+      ${overdue.map(line).join('')}
+      ${soon.map(line).join('')}
+    </div>`;
+}
+function diffDays(a,b){ return Math.round((parseDate(b)-parseDate(a))/86400000); }
+
+function renderMonthView(){
   const m = sess.calMonth;
   const y=m.getFullYear(), mo=m.getMonth();
-  const first = new Date(y,mo,1);
-  const startPad = first.getDay();
+  const startPad = new Date(y,mo,1).getDay();
   const daysInMonth = new Date(y,mo+1,0).getDate();
   const cells=[];
   for(let i=0;i<startPad;i++) cells.push(null);
   for(let d=1; d<=daysInMonth; d++) cells.push(d);
 
-  const monthLabel = `${y}年 ${mo+1}月`;
-  const evByDate = {};
-  DB.events.forEach(e=>{ const d=e.startAt.slice(0,10); (evByDate[d]=evByDate[d]||[]).push(e); });
-
-  let grid = `<div class="cal-grid">` + ['日','月','火','水','木','金','土'].map(d=>`<div class="cal-dow">${d}</div>`).join('');
+  let grid = `<div class="cal-grid">` + DOW_JP.map(d=>`<div class="cal-dow">${d}</div>`).join('');
   cells.forEach(d=>{
     if(d===null){ grid+=`<div class="cal-day pad"></div>`; return; }
     const dateStr = `${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const isToday = dateStr===todayStr();
-    const isSel = dateStr===sess.selectedDate;
-    const has = evByDate[dateStr];
-    grid += `<div class="cal-day ${isToday?'today':''} ${isSel?'sel':''}" data-date="${dateStr}">${d}${has?'<div class="dot"></div>':''}</div>`;
+    const has = eventsForDate(dateStr).length>0;
+    grid += `<div class="cal-day ${dateStr===todayStr()?'today':''} ${dateStr===sess.selectedDate?'sel':''}" data-date="${dateStr}">${d}${has?'<div class="dot"></div>':''}</div>`;
   });
   grid += `</div>`;
 
-  const dayEvents = DB.events.filter(e=>e.startAt.slice(0,10)===sess.selectedDate)
-    .sort((a,b)=>a.startAt.localeCompare(b.startAt));
-
+  const dayEvents = eventsForDate(sess.selectedDate);
   return `
-    <div class="label-row" style="justify-content:space-between; margin-bottom:10px;">
-      <button class="link-btn" data-nav="-1">${ICONS.arrow} 前月</button>
-      <div style="font-weight:700; font-family:'Shippori Mincho',serif;">${monthLabel}</div>
-      <button class="link-btn" data-nav="1" style="transform:scaleX(-1);">${ICONS.arrow}</button>
-    </div>
+    ${navRow(`${y}年 ${mo+1}月`)}
     ${grid}
     <div class="section-label">${fmtDate(sess.selectedDate)} の予定</div>
-    <div id="dayList">
-      ${dayEvents.length? dayEvents.map(evCard).join('') : emptyState('この日は予定がありません')}
-    </div>
-    <button class="fab" id="addEventFab">${ICONS.plus}</button>
+    ${dayEvents.length? dayEvents.map(evCard).join('') : emptyState('この日は予定がありません')}
   `;
+}
+
+// 週表示。1日ずつ見出しを立てて、その日の予定をぶら下げる。
+function renderWeekView(){
+  const base = parseDate(sess.selectedDate);
+  const start = addDays(sess.selectedDate, -base.getDay());   // その週の日曜
+  const days = Array.from({length:7}, (_,i)=>addDays(start,i));
+  const label = `${fmtDate(start)} 〜 ${fmtDate(days[6])}`;
+  return `
+    ${navRow(label)}
+    ${days.map(d=>{
+      const evs = eventsForDate(d);
+      return `<div class="week-day ${d===todayStr()?'today':''}">
+        <div class="week-head" data-date="${d}">${fmtDate(d)}</div>
+        ${evs.length? evs.map(evCard).join('')
+                    : `<div class="week-none">予定なし</div>`}
+      </div>`;
+    }).join('')}
+  `;
+}
+
+// 日表示。時間軸に沿って並べるので、空き時間の形が見える。
+function renderDayView(){
+  const d = sess.selectedDate;
+  const evs = eventsForDate(d);
+  const timed  = evs.filter(e=>!e.allDay);
+  const allDay = evs.filter(e=>e.allDay);
+  const from = timed.length ? Math.min(8, +timed[0].startAt.slice(11,13)) : 8;
+  const to   = timed.length ? Math.max(19, +timed[timed.length-1].startAt.slice(11,13)+1) : 19;
+  const hours = [];
+  for(let h=from; h<=to; h++) hours.push(h);
+  return `
+    ${navRow(fmtDate(d))}
+    ${allDay.length? `<div class="section-label">終日</div>${allDay.map(evCard).join('')}` : ''}
+    <div class="hour-grid">
+      ${hours.map(h=>{
+        const inHour = timed.filter(e=>+e.startAt.slice(11,13)===h);
+        return `<div class="hour-label">${String(h).padStart(2,'0')}</div>
+          <div class="hour-slot">${inHour.map(evCard).join('')}</div>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function navRow(label){
+  return `<div class="label-row" style="justify-content:space-between; margin-bottom:10px;">
+    <button class="link-btn" data-nav="-1">${ICONS.arrow}</button>
+    <div style="font-weight:700; font-family:'Shippori Mincho',serif;">${label}</div>
+    <button class="link-btn" data-nav="1" style="transform:scaleX(-1);">${ICONS.arrow}</button>
+  </div>`;
 }
 function evCard(e){
   const time = e.allDay? '終日' : e.startAt.slice(11,16);
-  return `<div class="card ${e.sourcePrintId?'ai':''}" data-ev="${e.id}">
-    <div class="label-row">${e.sourcePrintId?'<span class="chip ai">AI取込</span>':''}<span class="chip blue">${time}</span></div>
+  const lesson = e.source==='timetable';
+  // 授業は時間割から導いたものなので、ここからは編集させない（時間割タブで直す）。
+  const attr = lesson ? '' : ` data-ev="${e.id}"${e.occurrenceDate?` data-occ="${e.occurrenceDate}"`:''}`;
+  return `<div class="card ${lesson?'lesson':''} ${e.sourcePrintId?'ai':''}"${attr}>
+    <div class="label-row">
+      ${lesson? `<span class="chip lesson">${e.period}限</span>`:''}
+      ${e.sourcePrintId?'<span class="chip ai">AI取込</span>':''}
+      ${e.repeat?'<span class="chip blue">繰り返し</span>':''}
+      <span class="chip blue">${time}</span>
+    </div>
     <div class="title-row"><div class="item-title">${esc(e.title)}</div></div>
     ${e.description? `<div class="item-sub">${esc(e.description)}</div>`:''}
   </div>`;
@@ -583,20 +832,56 @@ function renderTasks(){
 function taskCard(t){
   const isDone = t.status==='DONE';
   const proj = t.projectId? DB.projects.find(p=>p.id===t.projectId) : null;
-  return `<div class="card ${isDone?'done':''} ${t.ai?'ai':''}" data-task="${t.id}">
+  const overdue = !isDone && t.dueAt && t.dueAt < todayStr();
+  return `<div class="card ${isDone?'done':''} ${overdue?'overdue':''} ${t.ai?'ai':''}" data-task="${t.id}">
     <div class="title-row">
       <div style="display:flex; gap:10px; align-items:flex-start; flex:1;">
         <div class="check ${isDone?'on':''}" data-toggle="${t.id}">${isDone? '済':''}</div>
         <div style="flex:1;">
-          <div class="label-row">${t.ai?'<span class="chip ai">AI取込</span>':''}${proj?`<span class="chip proj">${esc(proj.name)}</span>`:''}</div>
+          <div class="label-row">${t.ai?'<span class="chip ai">AI取込</span>':''}${proj?`<span class="chip proj">${esc(proj.name)}</span>`:''}${overdue?'<span class="chip late">期限切れ</span>':''}</div>
           <div class="item-title ${isDone?'strike':''}">${esc(t.title)}</div>
           ${t.description? `<div class="item-sub">${esc(t.description)}</div>`:''}
-          ${t.dueAt? `<div class="item-sub">期限：${fmtDate(t.dueAt)}</div>`:''}
+          ${t.dueAt? `<div class="item-sub ${overdue?'late-text':''}">期限：${fmtDate(t.dueAt)}</div>`:''}
         </div>
       </div>
       <button class="link-btn" data-deltask="${t.id}">${ICONS.trash}</button>
     </div>
   </div>`;
+}
+
+/* ============ SEARCH ============ */
+const SEARCH_FILTERS = [{k:'all',label:'すべて'},{k:'open',label:'未完了'},{k:'done',label:'完了'}];
+
+function renderSearch(){
+  const raw = sess.query || '';
+  const q = raw.trim().toLowerCase();
+  const filter = sess.searchFilter || 'all';
+  const head = `
+    <input type="text" id="searchInput" placeholder="タスク・予定を検索" value="${esc(raw)}" autocomplete="off">
+    <div class="filter-row">
+      ${SEARCH_FILTERS.map(f=>`<button class="filter-chip ${filter===f.k?'on':''}" data-filter="${f.k}">${f.label}</button>`).join('')}
+    </div>`;
+  if(!q) return head + emptyState('探したい言葉を入れてください');
+
+  const hit = (s)=> (s||'').toLowerCase().includes(q);
+
+  let tasks = DB.tasks.filter(t=>hit(t.title) || hit(t.description));
+  if(filter==='open') tasks = tasks.filter(t=>t.status==='OPEN');
+  if(filter==='done') tasks = tasks.filter(t=>t.status==='DONE');
+  tasks.sort((a,b)=>(a.dueAt||'').localeCompare(b.dueAt||''));
+
+  // 予定には完了・未完了が無いので、状態で絞っているときは対象から外す。
+  const events = filter==='all'
+    ? DB.events.filter(e=>hit(e.title) || hit(e.description))
+               .sort((a,b)=>a.startAt.localeCompare(b.startAt))
+    : [];
+
+  if(!tasks.length && !events.length){
+    return head + emptyState(`「${esc(raw.trim())}」に一致するものはありません`);
+  }
+  return head
+    + (tasks.length ? `<div class="section-label">タスク（${tasks.length}）</div>` + tasks.map(taskCard).join('') : '')
+    + (events.length? `<div class="section-label">予定（${events.length}）</div>` + events.map(evCard).join('') : '');
 }
 
 /* ============ PROJECTS ============ */
@@ -714,8 +999,7 @@ function renderPrint(){
 }
 
 function mockCandidates(){
-  const t = todayStr();
-  const plus = (n)=>{ const d=new Date(); d.setDate(d.getDate()+n); return d.toISOString().slice(0,10); };
+  const plus = (n)=>addDays(todayStr(), n);
   return [
     {type:'task', title:'数学プリント 応用問題 p.24', date:plus(5), include:true},
     {type:'event', title:'PTA全体保護者会', date:plus(9), time:'10:00', include:true},
@@ -724,6 +1008,10 @@ function mockCandidates(){
 }
 
 /* ============ COLONY ============ */
+// 参加者は members 配列で持つ。人数はその長さなので、表示と実態がずれない。
+function memberCount(c){ return (c.members||[]).length; }
+function isMember(c){ return (c.members||[]).some(m=>m.id===DB.user.id); }
+
 function renderColony(){
   if(sess.colonyDetail){
     const c = DB.colonies.find(x=>x.id===sess.colonyDetail);
@@ -734,6 +1022,14 @@ function renderColony(){
       <div class="item-sub" style="margin-bottom:16px;">${esc(c.description||'')}</div>
       <div class="section-label">招待コード</div>
       <div class="card" style="text-align:center; font-family:'Zen Old Mincho',serif; font-size:18px; letter-spacing:.2em;">${c.inviteCode}</div>
+      <div class="section-label">参加者（${memberCount(c)}）</div>
+      ${(c.members||[]).map(m=>`
+        <div class="card">
+          <div class="title-row">
+            <div class="item-title">${esc(m.name)}</div>
+            ${m.id===c.ownerId? '<span class="chip proj">作成者</span>' : ''}
+          </div>
+        </div>`).join('')}
       <div class="section-label">共有フィード</div>
       ${(c.feed||[]).length? c.feed.map(f=>`
         <div class="card">
@@ -742,6 +1038,7 @@ function renderColony(){
           <div class="item-sub">${esc(f.by)} が共有・${f.date}</div>
         </div>`).join('') : emptyState('まだ共有アイテムがありません')}
       <button class="btn ghost" id="shareTaskToColony">タスクをこのコロニーに共有</button>
+      <button class="btn ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" id="leaveColony">このコロニーから抜ける</button>
     `;
   }
   return `
@@ -750,10 +1047,11 @@ function renderColony(){
       <div class="card" data-colony="${c.id}">
         <div class="title-row">
           <div class="item-title">${esc(c.name)}</div>
-          <span class="chip blue">${(c.members||1)}人</span>
+          <span class="chip blue">${memberCount(c)}人</span>
         </div>
         <div class="item-sub">${esc(c.description||'')}</div>
       </div>`).join('') : emptyState('参加中のコロニーはありません')}
+    <button class="btn ghost" id="joinColonyBtn" style="margin-top:14px;">招待コードで参加する</button>
     <button class="fab" id="addColonyFab">${ICONS.plus}</button>
   `;
 }
@@ -791,13 +1089,41 @@ function modalContent(){
   const m = sess.modal;
   if(m.kind==='event'){
     const e = m.data||{};
+    const rep = e.repeat || null;
+    const allDay = !!e.allDay;
+    // 繰り返しの1回分を開いたときは、その回だけ直すのか全体を直すのかを選ばせる。
+    const scopeRow = (m.occurrenceDate && rep) ? `
+      <div class="field">
+        <label class="f">直す範囲</label>
+        <div class="filter-row">
+          <button class="filter-chip ${m.scope!=='all'?'on':''}" data-scope="one">この回だけ</button>
+          <button class="filter-chip ${m.scope==='all'?'on':''}" data-scope="all">繰り返し全体</button>
+        </div>
+      </div>` : '';
     return `
       <h3>${m.data?'予定を編集':'予定を追加'}</h3>
+      ${scopeRow}
       <div class="field"><label class="f">タイトル</label><input type="text" id="m-title" value="${esc(e.title||'')}"></div>
       <div class="field"><label class="f">説明</label><textarea id="m-desc" rows="2">${esc(e.description||'')}</textarea></div>
+      <div class="field">
+        <label class="toggle"><input type="checkbox" id="m-allday" ${allDay?'checked':''}><span>終日</span></label>
+      </div>
       <div class="row2">
-        <div class="field"><label class="f">日付</label><input type="date" id="m-date" value="${e.startAt? e.startAt.slice(0,10): sess.selectedDate}"></div>
-        <div class="field"><label class="f">時刻</label><input type="time" id="m-time" value="${e.startAt? e.startAt.slice(11,16):'09:00'}"></div>
+        <div class="field"><label class="f">日付</label><input type="date" id="m-date" value="${m.occurrenceDate || (e.startAt? e.startAt.slice(0,10): sess.selectedDate)}"></div>
+        <div class="field" id="m-time-field" style="${allDay?'display:none;':''}"><label class="f">時刻</label><input type="time" id="m-time" value="${e.startAt? e.startAt.slice(11,16):'09:00'}"></div>
+      </div>
+      <div class="field">
+        <label class="f">繰り返し</label>
+        <select id="m-repeat">
+          <option value=""        ${!rep?'selected':''}>なし</option>
+          <option value="daily"   ${rep?.freq==='daily'  ?'selected':''}>毎日</option>
+          <option value="weekly"  ${rep?.freq==='weekly' ?'selected':''}>毎週</option>
+          <option value="monthly" ${rep?.freq==='monthly'?'selected':''}>毎月</option>
+        </select>
+      </div>
+      <div class="field" id="m-until-field" style="${rep?'':'display:none;'}">
+        <label class="f">繰り返しの終わり（空なら終わりなし）</label>
+        <input type="date" id="m-until" value="${rep?.until||''}">
       </div>
       <button class="btn hanko" id="m-save">保存する</button>
       ${e.id? `<button class="btn ghost" style="margin-top:8px;" id="m-del">削除する</button>`:''}
@@ -807,7 +1133,7 @@ function modalContent(){
     const t = m.data||{};
     const presetProjectId = m.projectId || t.projectId || '';
     return `
-      <h3>タスクを追加</h3>
+      <h3>${m.data?'タスクを編集':'タスクを追加'}</h3>
       <div class="field"><label class="f">タイトル</label><input type="text" id="m-title" value="${esc(t.title||'')}"></div>
       <div class="field"><label class="f">説明</label><textarea id="m-desc" rows="2">${esc(t.description||'')}</textarea></div>
       <div class="field"><label class="f">期限</label><input type="date" id="m-date" value="${t.dueAt||todayStr()}"></div>
@@ -818,6 +1144,7 @@ function modalContent(){
         </select>
       </div>
       <button class="btn hanko" id="m-save">保存する</button>
+      ${t.id? `<button class="btn ghost" style="margin-top:8px;" id="m-del">削除する</button>`:''}
     `;
   }
   if(m.kind==='project'){
@@ -851,6 +1178,36 @@ function modalContent(){
       <button class="btn hanko" id="m-save">作成する</button>
     `;
   }
+  if(m.kind==='joinColony'){
+    return `
+      <h3>招待コードで参加</h3>
+      <div class="field">
+        <label class="f">招待コード</label>
+        <input type="text" id="m-code" placeholder="例）A1B2C3" autocomplete="off" style="text-transform:uppercase; letter-spacing:.2em;">
+      </div>
+      <div class="item-sub" style="margin-bottom:14px; line-height:1.7;">
+        いまはデータが端末の中にしか無いので、参加できるのはこの端末にあるコロニーだけです。
+        他の人が作ったコロニーに入れるようにするには、サーバー同期が要ります。
+      </div>
+      <button class="btn hanko" id="m-save">参加する</button>
+    `;
+  }
+  if(m.kind==='pickTask'){
+    const open = DB.tasks.filter(t=>t.status==='OPEN');
+    const list = open.length? open : DB.tasks;
+    if(!list.length){
+      return `<h3>共有するタスクを選ぶ</h3>${emptyState('共有できるタスクがありません')}`;
+    }
+    return `
+      <h3>共有するタスクを選ぶ</h3>
+      ${!open.length? '<div class="item-sub" style="margin-bottom:10px;">未完了のタスクが無いので、完了済みを含めて出しています。</div>':''}
+      ${list.map(t=>`
+        <div class="card" data-pick="${t.id}">
+          <div class="item-title">${esc(t.title)}</div>
+          ${t.dueAt? `<div class="item-sub">期限：${fmtDate(t.dueAt)}</div>`:''}
+        </div>`).join('')}
+    `;
+  }
   return '';
 }
 
@@ -860,13 +1217,34 @@ function bindScreen(){
   document.querySelectorAll('.cal-day[data-date]').forEach(el=>{
     el.onclick = ()=>{ sess.selectedDate = el.dataset.date; render(); };
   });
+  // 月表示は月送り、週表示は週送り、日表示は日送り。
   document.querySelectorAll('[data-nav]').forEach(el=>{
-    el.onclick = ()=>{ sess.calMonth.setMonth(sess.calMonth.getMonth()+parseInt(el.dataset.nav)); render(); };
+    el.onclick = ()=>{
+      const step = parseInt(el.dataset.nav);
+      if(sess.calView==='month'){
+        sess.calMonth.setMonth(sess.calMonth.getMonth()+step);
+      }else{
+        sess.selectedDate = addDays(sess.selectedDate, step*(sess.calView==='week'?7:1));
+        sess.calMonth = parseDate(sess.selectedDate);
+      }
+      render();
+    };
+  });
+  document.querySelectorAll('[data-view]').forEach(el=>{
+    el.onclick = ()=>{ sess.calView = el.dataset.view; render(); };
+  });
+  document.querySelectorAll('.week-head[data-date]').forEach(el=>{
+    el.onclick = ()=>{ sess.selectedDate = el.dataset.date; sess.calView='day'; render(); };
   });
   const addEventFab = document.getElementById('addEventFab');
   if(addEventFab) addEventFab.onclick = ()=>{ sess.modal={kind:'event', data:null}; renderModal(); };
   document.querySelectorAll('[data-ev]').forEach(el=>{
-    el.onclick = ()=>{ const e = DB.events.find(x=>x.id===el.dataset.ev); sess.modal={kind:'event', data:e}; renderModal(); };
+    el.onclick = ()=>{
+      const e = DB.events.find(x=>x.id===el.dataset.ev);
+      if(!e) return;
+      sess.modal = {kind:'event', data:e, occurrenceDate: el.dataset.occ || null, scope:'one'};
+      renderModal();
+    };
   });
 
   // timetable
@@ -878,14 +1256,46 @@ function bindScreen(){
   const addTaskFab = document.getElementById('addTaskFab');
   if(addTaskFab) addTaskFab.onclick = ()=>{ sess.modal={kind:'task', data:null}; renderModal(); };
   document.querySelectorAll('[data-toggle]').forEach(el=>{
-    el.onclick = async ()=>{
+    el.onclick = async (ev)=>{
+      ev.stopPropagation();          // カードを開かずにチェックだけ切り替える
       const t = DB.tasks.find(x=>x.id===el.dataset.toggle);
       t.status = t.status==='DONE'?'OPEN':'DONE';
       await save('tasks'); render(); toast(t.status==='DONE'?'完了にしました':'未完了に戻しました');
     };
   });
   document.querySelectorAll('[data-deltask]').forEach(el=>{
-    el.onclick = async ()=>{ DB.tasks = DB.tasks.filter(x=>x.id!==el.dataset.deltask); await save('tasks'); render(); };
+    el.onclick = async (ev)=>{
+      ev.stopPropagation();
+      DB.tasks = DB.tasks.filter(x=>x.id!==el.dataset.deltask);
+      await save('tasks'); render();
+    };
+  });
+  // タスクをタップして編集する。チェックと削除は上で stopPropagation してある。
+  document.querySelectorAll('[data-task]').forEach(el=>{
+    el.onclick = ()=>{
+      const t = DB.tasks.find(x=>x.id===el.dataset.task);
+      if(!t) return;
+      sess.modal = {kind:'task', data:t};
+      renderModal();
+    };
+  });
+
+  // search
+  const searchInput = document.getElementById('searchInput');
+  if(searchInput){
+    const apply = ()=>{
+      sess.query = searchInput.value;
+      const pos = searchInput.selectionStart;
+      render();
+      const next = document.getElementById('searchInput');
+      if(next){ next.focus(); next.setSelectionRange(pos,pos); }
+    };
+    // 日本語入力の変換中に再描画すると入力が壊れるので、確定するまで待つ。
+    searchInput.oninput = (ev)=>{ if(!ev.isComposing) apply(); };
+    searchInput.addEventListener('compositionend', apply);
+  }
+  document.querySelectorAll('[data-filter]').forEach(el=>{
+    el.onclick = ()=>{ sess.searchFilter = el.dataset.filter; render(); };
   });
 
   // projects
@@ -975,14 +1385,18 @@ function bindScreen(){
   });
   const backColony = document.getElementById('backColony');
   if(backColony) backColony.onclick = ()=>{ sess.colonyDetail=null; render(); };
+  const joinColonyBtn = document.getElementById('joinColonyBtn');
+  if(joinColonyBtn) joinColonyBtn.onclick = ()=>{ sess.modal={kind:'joinColony'}; renderModal(); };
   const shareTaskToColony = document.getElementById('shareTaskToColony');
-  if(shareTaskToColony) shareTaskToColony.onclick = async ()=>{
+  if(shareTaskToColony) shareTaskToColony.onclick = ()=>{ sess.modal={kind:'pickTask'}; renderModal(); };
+  const leaveColony = document.getElementById('leaveColony');
+  if(leaveColony) leaveColony.onclick = async ()=>{
     const c = DB.colonies.find(x=>x.id===sess.colonyDetail);
-    const t = DB.tasks[0];
-    if(!t){ toast('共有できるタスクがありません'); return; }
-    c.feed = c.feed||[];
-    c.feed.unshift({sourceType:'task', titleSnapshot:t.title, by:DB.user.name, date:fmtDate(todayStr())});
-    await save('colonies'); render(); toast('共有しました');
+    c.members = (c.members||[]).filter(m=>m.id!==DB.user.id);
+    // 最後の1人が抜けたら、誰も入れないコロニーが残らないよう消す。
+    if(!c.members.length) DB.colonies = DB.colonies.filter(x=>x.id!==c.id);
+    await save('colonies');
+    sess.colonyDetail=null; render(); toast('コロニーから抜けました');
   };
 
   // settings
@@ -994,22 +1408,69 @@ function bindModal(){
   const m = sess.modal;
   const saveBtn = document.getElementById('m-save');
   const delBtn = document.getElementById('m-del');
+
+  // 終日にしたら時刻欄は要らないので隠す
+  const allDayBox = document.getElementById('m-allday');
+  if(allDayBox) allDayBox.onchange = ()=>{
+    document.getElementById('m-time-field').style.display = allDayBox.checked ? 'none' : '';
+  };
+  // 繰り返しを選んだときだけ「終わり」を出す
+  const repeatSel = document.getElementById('m-repeat');
+  if(repeatSel) repeatSel.onchange = ()=>{
+    document.getElementById('m-until-field').style.display = repeatSel.value ? '' : 'none';
+  };
+  document.querySelectorAll('[data-scope]').forEach(el=>{
+    el.onclick = ()=>{ sess.modal.scope = el.dataset.scope; renderModal(); };
+  });
+  // 共有するタスクを選ぶ
+  document.querySelectorAll('[data-pick]').forEach(el=>{
+    el.onclick = async ()=>{
+      const c = DB.colonies.find(x=>x.id===sess.colonyDetail);
+      const t = DB.tasks.find(x=>x.id===el.dataset.pick);
+      if(!c || !t) return;
+      c.feed = c.feed||[];
+      if(c.feed.some(f=>f.sourceId===t.id)){ toast('このタスクは共有済みです'); return; }
+      c.feed.unshift({sourceType:'task', sourceId:t.id, titleSnapshot:t.title, by:DB.user.name, date:fmtDate(todayStr())});
+      await save('colonies');
+      sess.modal=null; render(); toast('共有しました');
+    };
+  });
+
   if(saveBtn) saveBtn.onclick = async ()=>{
     if(m.kind==='event'){
       const title = document.getElementById('m-title').value.trim();
       if(!title){ toast('タイトルを入力してください'); return; }
-      const desc = document.getElementById('m-desc').value;
-      const date = document.getElementById('m-date').value;
-      const time = document.getElementById('m-time').value;
-      if(m.data){ Object.assign(m.data, {title, description:desc, startAt:date+'T'+time}); }
-      else DB.events.push({id:uid(), title, description:desc, startAt:date+'T'+time, allDay:false, sourcePrintId:null});
+      const desc   = document.getElementById('m-desc').value;
+      const date   = document.getElementById('m-date').value;
+      const allDay = document.getElementById('m-allday').checked;
+      const time   = allDay ? '00:00' : document.getElementById('m-time').value;
+      const freq   = document.getElementById('m-repeat').value;
+      const until  = document.getElementById('m-until').value || null;
+      const repeat = freq ? {freq, until} : null;
+      const fields = {title, description:desc, startAt:date+'T'+time, allDay};
+
+      if(!m.data){
+        DB.events.push({id:uid(), ...fields, repeat, exdates:[], sourcePrintId:null});
+      }else if(m.occurrenceDate && m.data.repeat && m.scope!=='all'){
+        // この回だけ直す：元の繰り返しからその日を外し、単発の予定として切り出す。
+        m.data.exdates = (m.data.exdates||[]).concat(m.occurrenceDate);
+        DB.events.push({id:uid(), ...fields, repeat:null, exdates:[], sourcePrintId:m.data.sourcePrintId||null});
+      }else{
+        Object.assign(m.data, fields, {repeat});
+      }
       await save('events');
     }
     if(m.kind==='task'){
       const title = document.getElementById('m-title').value.trim();
       if(!title){ toast('タイトルを入力してください'); return; }
-      const projectId = document.getElementById('m-project').value || null;
-      DB.tasks.push({id:uid(), title, description:document.getElementById('m-desc').value, dueAt:document.getElementById('m-date').value, status:'OPEN', ai:false, projectId});
+      const fields = {
+        title,
+        description: document.getElementById('m-desc').value,
+        dueAt:       document.getElementById('m-date').value,
+        projectId:   document.getElementById('m-project').value || null,
+      };
+      if(m.data) Object.assign(m.data, fields);
+      else DB.tasks.push({id:uid(), ...fields, status:'OPEN', ai:false});
       await save('tasks');
     }
     if(m.kind==='project'){
@@ -1034,13 +1495,43 @@ function bindModal(){
     if(m.kind==='colony'){
       const name = document.getElementById('m-name').value.trim();
       if(!name){ toast('名前を入力してください'); return; }
-      DB.colonies.push({id:uid(), name, description:document.getElementById('m-desc').value, inviteCode:Math.random().toString(36).slice(2,8).toUpperCase(), members:1, feed:[]});
+      DB.colonies.push({
+        id:uid(), name,
+        description: document.getElementById('m-desc').value,
+        inviteCode: Math.random().toString(36).slice(2,8).toUpperCase(),
+        ownerId: DB.user.id,
+        members: [{id:DB.user.id, name:DB.user.name}],
+        feed: [],
+      });
       await save('colonies');
+    }
+    if(m.kind==='joinColony'){
+      const code = document.getElementById('m-code').value.trim().toUpperCase();
+      if(!code){ toast('招待コードを入力してください'); return; }
+      const c = DB.colonies.find(x=>x.inviteCode===code);
+      if(!c){ toast('そのコードのコロニーは見つかりません'); return; }
+      if(isMember(c)){ toast('すでに参加しています'); return; }
+      c.members = (c.members||[]).concat({id:DB.user.id, name:DB.user.name});
+      await save('colonies');
+      sess.modal=null; sess.colonyDetail=c.id; render(); toast(`${c.name} に参加しました`);
+      return;
     }
     sess.modal=null; render();
   };
   if(delBtn) delBtn.onclick = async ()=>{
-    if(m.kind==='event'){ DB.events = DB.events.filter(x=>x.id!==m.data.id); await save('events'); }
+    if(m.kind==='event'){
+      if(m.occurrenceDate && m.data.repeat && m.scope!=='all'){
+        // この回だけ消す：繰り返しは残したまま、その日を除外日に足す。
+        m.data.exdates = (m.data.exdates||[]).concat(m.occurrenceDate);
+      }else{
+        DB.events = DB.events.filter(x=>x.id!==m.data.id);
+      }
+      await save('events');
+    }
+    if(m.kind==='task'){
+      DB.tasks = DB.tasks.filter(x=>x.id!==m.data.id);
+      await save('tasks');
+    }
     if(m.kind==='ttcell'){
       const [d,p]=m.key.split('_');
       DB.timetable = DB.timetable.filter(x=>!(x.dayOfWeek==d && x.period==p));
