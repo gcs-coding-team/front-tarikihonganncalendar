@@ -504,18 +504,162 @@ function eventsForDate(dateStr){
     (b.allDay?1:0)-(a.allDay?1:0) || a.startAt.localeCompare(b.startAt));
 }
 
+/* ============ API ============ */
+// バックエンド（github.com/gcs-coding-team/tarikihonganncalendar）に繋ぐ層。
+//
+// サーバーは CORS を返さないので、フロントと API は同じオリジンに置く前提で
+// 相対パスを叩く。配信側で /v1 と /healthz を API に回すこと。
+// サーバーに届かないときは ONLINE=false のまま端末内だけで動く。
+const API_BASE = '/v1';
+let ONLINE = false;
+let AUTH = { userId:null, token:null };
+
+// サーバーが持つのは予定・時間割・コロニーだけ。
+// タスクとプロジェクトのエンドポイントはまだ無いので端末内に残す。
+const SERVER_KEYS = ['events','timetable','colonies'];
+
+async function api(method, path, body){
+  const res = await fetch(API_BASE+path, {
+    method,
+    headers: {
+      ...(body ? {'Content-Type':'application/json'} : {}),
+      ...(AUTH.token  ? {'Authorization':'Bearer '+AUTH.token} : {}),
+      ...(AUTH.userId ? {'X-User-ID': AUTH.userId} : {}),
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if(res.status===204) return null;
+  const json = await res.json().catch(()=>null);
+  if(!res.ok){
+    const err = new Error(json?.error?.code || String(res.status));
+    err.code = json?.error?.code; err.status = res.status;
+    throw err;
+  }
+  return json?.data;
+}
+
+async function probeServer(){
+  try{
+    const res = await fetch('/healthz', {method:'GET'});
+    ONLINE = res.ok;
+  }catch(e){ ONLINE = false; }
+  return ONLINE;
+}
+
+// フロントは 'YYYY-MM-DDTHH:mm'（端末のローカル時刻）、サーバーは RFC3339。
+function toServerTime(local){ return new Date(local).toISOString(); }
+function toLocalTime(rfc){
+  const d = new Date(rfc);
+  return ymd(d)+'T'+String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+}
+
+// サーバーの予定には繰り返しの概念が無い。repeat と exdates は端末側にだけ
+// 残るので、別の端末から見ると繰り返しは展開されない。
+function toServerEvent(e){
+  return {
+    title: e.title, description: e.description||'',
+    startAt: toServerTime(e.startAt),
+    endAt:   toServerTime(e.startAt),
+    allDay: !!e.allDay,
+  };
+}
+function fromServerEvent(row, prev){
+  return {
+    id: row.id, title: row.title, description: row.description||'',
+    startAt: toLocalTime(row.startAt), allDay: !!row.allDay,
+    version: row.version,
+    repeat: prev?.repeat ?? null, exdates: prev?.exdates ?? [],
+    sourcePrintId: prev?.sourcePrintId ?? null,
+  };
+}
+
+const Server = {
+  async login(userId, name){
+    const s = await api('POST','/auth/sessions', {userId, name});
+    AUTH = { userId: s.userId, token: s.token };
+    return s;
+  },
+  async logout(){
+    if(AUTH.token) await api('DELETE','/auth/sessions/'+encodeURIComponent(AUTH.token)).catch(()=>{});
+    AUTH = { userId:null, token:null };
+  },
+  async pull(){
+    const knownColonyIds = DB.colonies.map(c=>c.id);
+    const [events, timetable, owned] = await Promise.all([
+      api('GET','/events'), api('GET','/timetable-entries'), api('GET','/colonies'),
+    ]);
+    const byId = Object.fromEntries(DB.events.map(e=>[e.id,e]));
+    DB.events    = (events||[]).map(r=>fromServerEvent(r, byId[r.id]));
+    DB.timetable = (timetable||[]).map(r=>({
+      id:r.id, dayOfWeek:r.dayOfWeek, period:r.period,
+      subject:r.subject, room:r.room||'', teacher:r.teacher||'', version:r.version,
+    }));
+
+    // GET /colonies は自分が作ったものしか返さない。参加しただけのコロニーは
+    // 一覧に出てこないので、こちらが覚えている ID を個別に引き直して補う。
+    const rows = [...(owned||[])];
+    const seen = new Set(rows.map(c=>c.id));
+    for(const id of knownColonyIds){
+      if(seen.has(id)) continue;
+      const c = await api('GET','/colonies/'+id).catch(()=>null);
+      if(c) rows.push(c);
+    }
+    DB.colonies = await Promise.all(rows.map(async c=>({
+      id:c.id, name:c.name, description:c.description||'',
+      inviteCode:c.inviteCode||'', ownerId:c.ownerUserId,
+      members: (await api('GET',`/colonies/${c.id}/members`).catch(()=>[]) || [])
+                 .map(m=>({id:m.userId, name:m.userId, role:m.role})),
+      feed: (await api('GET',`/colonies/${c.id}/feed`).catch(()=>[]) || [])
+                 .map(f=>({sourceType:f.sourceType==='TASK'?'task':'event', sourceId:f.sourceId,
+                           titleSnapshot:f.titleSnapshot||'(タイトルなし)', by:f.createdBy, date:''})),
+    })));
+  },
+  getColony: (id)=>api('GET','/colonies/'+id),
+  createEvent:  (e)=>api('POST','/events', toServerEvent(e)),
+  updateEvent:  (e)=>api('PATCH','/events/'+e.id, {...toServerEvent(e), version:e.version}),
+  deleteEvent:  (id)=>api('DELETE','/events/'+id),
+  createEntry:  (t)=>api('POST','/timetable-entries', {dayOfWeek:t.dayOfWeek, period:t.period, subject:t.subject, room:t.room||'', teacher:t.teacher||''}),
+  updateEntry:  (t)=>api('PATCH','/timetable-entries/'+t.id, {subject:t.subject, room:t.room||'', teacher:t.teacher||'', version:t.version}),
+  deleteEntry:  (id)=>api('DELETE','/timetable-entries/'+id),
+  createColony: (c)=>api('POST','/colonies', {name:c.name, description:c.description||''}),
+  joinColony:   (id, inviteCode)=>api('POST',`/colonies/${id}/join`, {inviteCode}),
+  leaveColony:  (id)=>api('POST',`/colonies/${id}/leave`, {}),
+  shareItem:    (colonyId, t)=>api('POST',`/colonies/${colonyId}/shared-items`, {sourceType:'TASK', sourceId:t.id, titleSnapshot:t.title}),
+};
+
+// サーバーが落ちていても操作を止めない。失敗したら端末内の変更だけ残す。
+async function withServer(fn, whenOffline){
+  if(!ONLINE) return whenOffline?.();
+  try{ return await fn(); }
+  catch(e){
+    console.error('server call failed', e);
+    toast(e.code==='CONFLICT' ? '他の端末で更新されています。開き直してください'
+                              : 'サーバーに反映できませんでした');
+    return whenOffline?.();
+  }
+}
+
+/* ============ LOCAL STORAGE ============ */
+// window.storage は Claude のアーティファクト内でしか存在しない。
+// 普通のWebページとして配信するときは localStorage に落とす。これが無いと
+// リロードのたびにログイン状態も、サーバーに置き場の無いタスクとプロジェクトも消える。
+const STORE = window.storage || {
+  get: async (k)=>{ const v = localStorage.getItem('tariki_'+k); return v===null ? null : {value:v}; },
+  set: async (k,v)=>{ localStorage.setItem('tariki_'+k, v); },
+};
+
 async function loadAll(){
   const keys = ['events','tasks','timetable','colonies','projects','user'];
   for(const k of keys){
     try{
-      const r = await window.storage.get(k, false);
+      const r = await STORE.get(k, false);
       if(r && r.value) DB[k] = JSON.parse(r.value);
     }catch(e){ /* not found yet, keep default */ }
   }
   if(!DB.events) DB.events=[]; if(!DB.tasks) DB.tasks=[]; if(!DB.timetable) DB.timetable=[]; if(!DB.colonies) DB.colonies=[]; if(!DB.projects) DB.projects=[];
 }
 async function save(key){
-  try{ await window.storage.set(key, JSON.stringify(DB[key]), false); }catch(e){ console.error('save failed',key,e); }
+  try{ await STORE.set(key, JSON.stringify(DB[key]), false); }catch(e){ console.error('save failed',key,e); }
 }
 
 function toast(msg){
@@ -524,6 +668,19 @@ function toast(msg){
 }
 
 /* ============ SEED (only if empty, first run) ============ */
+// サーバーに繋がっているときは、予定と時間割はサーバーから来る。
+// 置き場の無いタスクとプロジェクトだけ、初回の見本を入れる。
+function seedLocalOnly(){
+  const t = todayStr();
+  DB.projects = [
+    {id:uid(), name:'文化祭 実行委員', description:'11月の文化祭に向けた準備をまとめるプロジェクト', createdAt:t},
+  ];
+  DB.tasks = [
+    {id:uid(), title:'数学プリント p.12-13', description:'章末問題まで', dueAt:t, status:'OPEN', ai:false, projectId:null},
+    {id:uid(), title:'看板デザイン案の提出', description:'クラス企画用', dueAt:t, status:'OPEN', ai:false, projectId:DB.projects[0].id},
+  ];
+}
+
 function seedIfEmpty(){
   if(DB.events.length===0 && DB.tasks.length===0 && DB.timetable.length===0){
     const t = todayStr();
@@ -640,6 +797,23 @@ function bindLogin(){
     const name = document.getElementById('li-name').value.trim() || 'ゲスト';
     const id = document.getElementById('li-id').value.trim() || uid();
     DB.user = {name, id};
+
+    if(ONLINE){
+      // サーバーがいるなら、そこにセッションを作って中身を引いてくる。
+      const ok = await withServer(async ()=>{
+        await Server.login(id, name);
+        await Server.pull();
+        return true;
+      });
+      if(ok){
+        // タスクとプロジェクトはサーバーに置き場が無いので端末内のまま。
+        if(!DB.tasks.length && !DB.projects.length) seedLocalOnly();
+        await save('user');
+        await Promise.all(['events','tasks','timetable','colonies','projects'].map(save));
+        sess.tab='cal'; render(); toast(`${name} さんでログインしました`);
+        return;
+      }
+    }
     await save('user');
     seedIfEmpty();
     await Promise.all(['events','tasks','timetable','projects'].map(save));
@@ -1012,6 +1186,14 @@ function mockCandidates(){
 function memberCount(c){ return (c.members||[]).length; }
 function isMember(c){ return (c.members||[]).some(m=>m.id===DB.user.id); }
 
+// サーバーに繋がっているときの招待は「コロニーID-招待コード」で配る。
+// サーバー側にコードだけで探す口が無いため、ID を一緒に持たせている。
+function inviteString(c){ return ONLINE ? `${c.id}-${c.inviteCode}` : c.inviteCode; }
+function splitInvite(s){
+  const i = s.lastIndexOf('-');
+  return i<0 ? [null,s] : [s.slice(0,i), s.slice(i+1)];
+}
+
 function renderColony(){
   if(sess.colonyDetail){
     const c = DB.colonies.find(x=>x.id===sess.colonyDetail);
@@ -1021,7 +1203,8 @@ function renderColony(){
       <div style="font-family:'Shippori Mincho',serif; font-weight:800; font-size:19px; margin:10px 0 4px;">${esc(c.name)}</div>
       <div class="item-sub" style="margin-bottom:16px;">${esc(c.description||'')}</div>
       <div class="section-label">招待コード</div>
-      <div class="card" style="text-align:center; font-family:'Zen Old Mincho',serif; font-size:18px; letter-spacing:.2em;">${c.inviteCode}</div>
+      <div class="card" style="text-align:center; font-family:'Zen Old Mincho',serif; font-size:15px; letter-spacing:.1em; word-break:break-all;">${esc(inviteString(c))}</div>
+      <div class="item-sub">この文字列をそのまま渡してください。</div>
       <div class="section-label">参加者（${memberCount(c)}）</div>
       ${(c.members||[]).map(m=>`
         <div class="card">
@@ -1067,7 +1250,19 @@ function renderSettings(){
       <div class="item-sub">ユーザーID</div>
       <div class="item-title">${esc(DB.user.id)}</div>
     </div>
-    <button class="btn ghost" id="logoutBtn" style="margin-top:20px;">ログアウト</button>
+    <div class="section-label">サーバー</div>
+    <div class="card">
+      <div class="label-row">
+        <span class="chip ${ONLINE?'proj':'late'}">${ONLINE?'接続中':'未接続'}</span>
+      </div>
+      <div class="item-sub" style="line-height:1.7;">
+        ${ONLINE
+          ? '予定・時間割・コロニーはサーバーと同期しています。タスクとプロジェクトは置き場が無いので、この端末の中だけです。'
+          : 'サーバーに繋がっていないので、すべて端末の中だけで動いています。'}
+      </div>
+    </div>
+    ${ONLINE? `<button class="btn ghost" id="syncBtn" style="margin-top:10px;">サーバーから引き直す</button>`:''}
+    <button class="btn ghost" id="logoutBtn" style="margin-top:10px;">ログアウト</button>
     <div class="item-sub" style="text-align:center; margin-top:24px;">他力本願カレンダー — プロトタイプ v0.1</div>
   `;
 }
@@ -1183,11 +1378,12 @@ function modalContent(){
       <h3>招待コードで参加</h3>
       <div class="field">
         <label class="f">招待コード</label>
-        <input type="text" id="m-code" placeholder="例）A1B2C3" autocomplete="off" style="text-transform:uppercase; letter-spacing:.2em;">
+        <input type="text" id="m-code" placeholder="${ONLINE?'コロニー画面の文字列をそのまま':'例）A1B2C3'}" autocomplete="off">
       </div>
       <div class="item-sub" style="margin-bottom:14px; line-height:1.7;">
-        いまはデータが端末の中にしか無いので、参加できるのはこの端末にあるコロニーだけです。
-        他の人が作ったコロニーに入れるようにするには、サーバー同期が要ります。
+        ${ONLINE
+          ? 'コロニー画面に出ている招待コードを、そのまま貼り付けてください。'
+          : 'サーバーに繋がっていないので、参加できるのはこの端末にあるコロニーだけです。'}
       </div>
       <button class="btn hanko" id="m-save">参加する</button>
     `;
@@ -1392,6 +1588,7 @@ function bindScreen(){
   const leaveColony = document.getElementById('leaveColony');
   if(leaveColony) leaveColony.onclick = async ()=>{
     const c = DB.colonies.find(x=>x.id===sess.colonyDetail);
+    await withServer(()=>Server.leaveColony(c.id));
     c.members = (c.members||[]).filter(m=>m.id!==DB.user.id);
     // 最後の1人が抜けたら、誰も入れないコロニーが残らないよう消す。
     if(!c.members.length) DB.colonies = DB.colonies.filter(x=>x.id!==c.id);
@@ -1400,8 +1597,22 @@ function bindScreen(){
   };
 
   // settings
+  const syncBtn = document.getElementById('syncBtn');
+  if(syncBtn) syncBtn.onclick = async ()=>{
+    await withServer(async ()=>{
+      await Server.pull();
+      await Promise.all(SERVER_KEYS.map(save));
+      toast('サーバーから引き直しました');
+    });
+    render();
+  };
   const logoutBtn = document.getElementById('logoutBtn');
-  if(logoutBtn) logoutBtn.onclick = ()=>{ DB.user=null; sess.tab='login'; render(); };
+  if(logoutBtn) logoutBtn.onclick = async ()=>{
+    await withServer(()=>Server.logout());
+    DB.user=null;
+    await save('user');            // 消しておかないと開き直しでログインが戻る
+    sess.tab='login'; render();
+  };
 }
 
 function bindModal(){
@@ -1430,6 +1641,9 @@ function bindModal(){
       if(!c || !t) return;
       c.feed = c.feed||[];
       if(c.feed.some(f=>f.sourceId===t.id)){ toast('このタスクは共有済みです'); return; }
+      // サーバーは (colonyId, sourceType, sourceId) の重複を 409 で弾く。
+      const row = await withServer(()=>Server.shareItem(c.id, t));
+      if(row===undefined && ONLINE) return;   // 409 などで弾かれた
       c.feed.unshift({sourceType:'task', sourceId:t.id, titleSnapshot:t.title, by:DB.user.name, date:fmtDate(todayStr())});
       await save('colonies');
       sess.modal=null; render(); toast('共有しました');
@@ -1450,13 +1664,20 @@ function bindModal(){
       const fields = {title, description:desc, startAt:date+'T'+time, allDay};
 
       if(!m.data){
-        DB.events.push({id:uid(), ...fields, repeat, exdates:[], sourcePrintId:null});
+        const draft = {id:uid(), ...fields, repeat, exdates:[], sourcePrintId:null};
+        const row = await withServer(()=>Server.createEvent(draft));
+        DB.events.push(row ? {...fromServerEvent(row), repeat, exdates:[]} : draft);
       }else if(m.occurrenceDate && m.data.repeat && m.scope!=='all'){
         // この回だけ直す：元の繰り返しからその日を外し、単発の予定として切り出す。
         m.data.exdates = (m.data.exdates||[]).concat(m.occurrenceDate);
-        DB.events.push({id:uid(), ...fields, repeat:null, exdates:[], sourcePrintId:m.data.sourcePrintId||null});
+        const draft = {id:uid(), ...fields, repeat:null, exdates:[], sourcePrintId:m.data.sourcePrintId||null};
+        const row = await withServer(()=>Server.createEvent(draft));
+        DB.events.push(row ? fromServerEvent(row) : draft);
+        await withServer(()=>Server.updateEvent(m.data));
       }else{
         Object.assign(m.data, fields, {repeat});
+        const row = await withServer(()=>Server.updateEvent(m.data));
+        if(row) m.data.version = row.version;
       }
       await save('events');
     }
@@ -1488,27 +1709,55 @@ function bindModal(){
       const room = document.getElementById('m-room').value;
       const teacher = document.getElementById('m-teacher').value;
       let ex = DB.timetable.find(x=>x.dayOfWeek==d && x.period==p);
-      if(ex) Object.assign(ex, {subject, room, teacher});
-      else DB.timetable.push({id:uid(), dayOfWeek:+d, period:+p, subject, room, teacher});
+      if(ex){
+        Object.assign(ex, {subject, room, teacher});
+        const row = await withServer(()=>Server.updateEntry(ex));
+        if(row) ex.version = row.version;
+      }else{
+        const draft = {id:uid(), dayOfWeek:+d, period:+p, subject, room, teacher};
+        const row = await withServer(()=>Server.createEntry(draft));
+        DB.timetable.push(row ? {...draft, id:row.id, version:row.version} : draft);
+      }
       await save('timetable');
     }
     if(m.kind==='colony'){
       const name = document.getElementById('m-name').value.trim();
       if(!name){ toast('名前を入力してください'); return; }
-      DB.colonies.push({
+      const draft = {
         id:uid(), name,
         description: document.getElementById('m-desc').value,
         inviteCode: Math.random().toString(36).slice(2,8).toUpperCase(),
         ownerId: DB.user.id,
         members: [{id:DB.user.id, name:DB.user.name}],
         feed: [],
-      });
+      };
+      const row = await withServer(()=>Server.createColony(draft));
+      DB.colonies.push(row ? {...draft, id:row.id, inviteCode:row.inviteCode, ownerId:row.ownerUserId} : draft);
       await save('colonies');
     }
     if(m.kind==='joinColony'){
-      const code = document.getElementById('m-code').value.trim().toUpperCase();
+      const code = document.getElementById('m-code').value.trim();
       if(!code){ toast('招待コードを入力してください'); return; }
-      const c = DB.colonies.find(x=>x.inviteCode===code);
+      if(ONLINE){
+        // サーバーには「コードからコロニーを探す」口が無く、参加はコロニーIDを
+        // 指定して呼ぶ作りになっている。そこで招待は「ID-コード」の一続きの
+        // 文字列として配る（コロニー画面に出しているのがそれ）。
+        const [colonyId, inviteCode] = splitInvite(code);
+        if(!colonyId){ toast('招待コードは「ID-コード」の形で入れてください'); return; }
+        const ok = await withServer(async ()=>{
+          await Server.joinColony(colonyId, inviteCode);
+          return true;
+        });
+        if(!ok) return;
+        const c = await withServer(()=>Server.getColony(colonyId));
+        DB.colonies.push({id:colonyId, name:c?.name||'コロニー', description:c?.description||'',
+                          inviteCode:c?.inviteCode||inviteCode, ownerId:c?.ownerUserId, members:[], feed:[]});
+        await withServer(()=>Server.pull());
+        await save('colonies');
+        sess.modal=null; sess.colonyDetail=colonyId; render(); toast(`${c?.name||'コロニー'} に参加しました`);
+        return;
+      }
+      const c = DB.colonies.find(x=>x.inviteCode.toUpperCase()===code.toUpperCase());
       if(!c){ toast('そのコードのコロニーは見つかりません'); return; }
       if(isMember(c)){ toast('すでに参加しています'); return; }
       c.members = (c.members||[]).concat({id:DB.user.id, name:DB.user.name});
@@ -1523,8 +1772,10 @@ function bindModal(){
       if(m.occurrenceDate && m.data.repeat && m.scope!=='all'){
         // この回だけ消す：繰り返しは残したまま、その日を除外日に足す。
         m.data.exdates = (m.data.exdates||[]).concat(m.occurrenceDate);
+        await withServer(()=>Server.updateEvent(m.data));
       }else{
         DB.events = DB.events.filter(x=>x.id!==m.data.id);
+        await withServer(()=>Server.deleteEvent(m.data.id));
       }
       await save('events');
     }
@@ -1534,7 +1785,9 @@ function bindModal(){
     }
     if(m.kind==='ttcell'){
       const [d,p]=m.key.split('_');
+      const gone = DB.timetable.find(x=>x.dayOfWeek==d && x.period==p);
       DB.timetable = DB.timetable.filter(x=>!(x.dayOfWeek==d && x.period==p));
+      if(gone) await withServer(()=>Server.deleteEntry(gone.id));
       await save('timetable');
     }
     sess.modal=null; render();
@@ -1544,6 +1797,15 @@ function bindModal(){
 /* ============ INIT ============ */
 (async function init(){
   await loadAll();
+  await probeServer();
+  // 前回ログインしたままなら、セッションを取り直して最新を引く。
+  if(ONLINE && DB.user){
+    await withServer(async ()=>{
+      await Server.login(DB.user.id, DB.user.name);
+      await Server.pull();
+      await Promise.all(SERVER_KEYS.map(save));
+    });
+  }
   render();
 })();
 </script>
