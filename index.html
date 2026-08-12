@@ -166,13 +166,14 @@ body{
 .card.done::after{background:var(--sage);}
 .card.ai::after{background:var(--highlight);}
 
-.label-row{display:flex; align-items:center; gap:6px; margin-bottom:4px;}
+.label-row{display:flex; align-items:center; gap:6px; margin-bottom:4px; flex-wrap:wrap;}
 .chip{
   font-size:10px; font-weight:700; padding:2px 6px; border-radius:2px;
   border:1px solid currentColor;
 }
 .chip.ai{color:#8a6d0f; border-color:#c7a728; background:#FBF0C7;}
 .chip.blue{color:var(--pen-blue); border-color:var(--pen-blue);}
+.chip.proj{color:var(--sage); border-color:var(--sage);}
 
 .title-row{display:flex; justify-content:space-between; align-items:flex-start; gap:8px;}
 .item-title{font-weight:700; font-size:15px; line-height:1.4;}
@@ -310,6 +311,10 @@ label.f{font-size:11px; color:var(--ink-soft); display:block; margin-bottom:4px;
 .candidate .top{display:flex; gap:8px; align-items:flex-start;}
 .candidate input[type=text]{margin-bottom:6px;}
 .link-btn{background:none;border:none;color:var(--pen-blue); font-size:12px; font-weight:700; padding:6px 0; cursor:pointer; font-family:inherit;}
+
+/* project progress */
+.progress-track{height:5px; background:var(--paper-2); border-radius:3px; overflow:hidden; margin-top:8px;}
+.progress-fill{height:100%; background:var(--pen-blue); border-radius:3px;}
 </style>
 </head>
 <body>
@@ -338,10 +343,11 @@ const ICONS = {
   arrow: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"/></svg>`,
   photo: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="1.5"/><circle cx="8.5" cy="9.5" r="1.6"/><path d="M21 16l-5.5-5.5a1.5 1.5 0 0 0-2.1 0L4 19"/></svg>`,
   trash: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.6c0-.6.5-1.1 1.1-1.1h3.8c.6 0 1.1.5 1.1 1.1V7M18 7l-.8 12.2A2 2 0 0 1 15.2 21H8.8a2 2 0 0 1-2-1.8L6 7"/></svg>`,
+  folder: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.6a1.6 1.6 0 0 1 1.6-1.6h4.3l2.1 2.3h7.4a1.6 1.6 0 0 1 1.6 1.6v8.9a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6V6.6z"/></svg>`,
 };
 
 /* ============ STATE ============ */
-let DB = { events:[], tasks:[], timetable:[], colonies:[], user:null };
+let DB = { events:[], tasks:[], timetable:[], colonies:[], projects:[], user:null };
 let sess = { tab:'cal', selectedDate: todayStr(), calMonth:new Date(), modal:null, printFlow:null };
 
 function uid(){ return 'id_'+Math.random().toString(36).slice(2,10); }
@@ -349,14 +355,14 @@ function todayStr(){ const d=new Date(); return d.toISOString().slice(0,10); }
 function fmtDate(s){ const d=new Date(s+'T00:00:00'); return `${d.getMonth()+1}/${d.getDate()}(${['日','月','火','水','木','金','土'][d.getDay()]})`; }
 
 async function loadAll(){
-  const keys = ['events','tasks','timetable','colonies','user'];
+  const keys = ['events','tasks','timetable','colonies','projects','user'];
   for(const k of keys){
     try{
       const r = await window.storage.get(k, false);
       if(r && r.value) DB[k] = JSON.parse(r.value);
     }catch(e){ /* not found yet, keep default */ }
   }
-  if(!DB.events) DB.events=[]; if(!DB.tasks) DB.tasks=[]; if(!DB.timetable) DB.timetable=[]; if(!DB.colonies) DB.colonies=[];
+  if(!DB.events) DB.events=[]; if(!DB.tasks) DB.tasks=[]; if(!DB.timetable) DB.timetable=[]; if(!DB.colonies) DB.colonies=[]; if(!DB.projects) DB.projects=[];
 }
 async function save(key){
   try{ await window.storage.set(key, JSON.stringify(DB[key]), false); }catch(e){ console.error('save failed',key,e); }
@@ -377,9 +383,13 @@ function seedIfEmpty(){
       {id:uid(), dayOfWeek:2, period:1, subject:'化学', room:'理科室', teacher:'鈴木'},
       {id:uid(), dayOfWeek:3, period:3, subject:'英語', room:'2-A', teacher:'ジョーンズ'},
     ];
+    DB.projects = [
+      {id:uid(), name:'文化祭 実行委員', description:'11月の文化祭に向けた準備をまとめるプロジェクト', createdAt:t},
+    ];
     DB.tasks = [
-      {id:uid(), title:'数学プリント p.12-13', description:'章末問題まで', dueAt:t, status:'OPEN', ai:false},
-      {id:uid(), title:'読書感想文 提出', description:'', dueAt:t, status:'DONE', ai:false},
+      {id:uid(), title:'数学プリント p.12-13', description:'章末問題まで', dueAt:t, status:'OPEN', ai:false, projectId:null},
+      {id:uid(), title:'読書感想文 提出', description:'', dueAt:t, status:'DONE', ai:false, projectId:null},
+      {id:uid(), title:'看板デザイン案の提出', description:'クラス企画用', dueAt:t, status:'OPEN', ai:false, projectId:DB.projects[0].id},
     ];
     DB.events = [
       {id:uid(), title:'部活 全体練習', description:'体育館', startAt:t+'T16:00', allDay:false, sourcePrintId:null},
@@ -388,12 +398,13 @@ function seedIfEmpty(){
 }
 
 /* ============ RENDER ROOT ============ */
-const TITLES = { cal:'カレンダー', tt:'時間割', task:'タスク一覧', print:'プリント取込', colony:'コロニー', settings:'設定' };
-const IDXMAP = { cal:'1', tt:'2', task:'3', print:'4', colony:'5', settings:'6' };
+const TITLES = { cal:'カレンダー', tt:'時間割', task:'タスク一覧', proj:'プロジェクト', print:'プリント取込', colony:'コロニー', settings:'設定' };
+const IDXMAP = { cal:'1', tt:'2', task:'3', proj:'4', print:'5', colony:'6', settings:'7' };
 const TABS = [
   {k:'cal', icon:ICONS.cal, label:'カレンダー'},
   {k:'tt', icon:ICONS.grid, label:'時間割'},
   {k:'task', icon:ICONS.check, label:'タスク'},
+  {k:'proj', icon:ICONS.folder, label:'プロジェクト'},
   {k:'print', icon:ICONS.cam, label:'プリント'},
   {k:'colony', icon:ICONS.users, label:'コロニー'},
   {k:'settings', icon:ICONS.gear, label:'設定'},
@@ -431,6 +442,7 @@ function render(){
   if(sess.tab==='cal') html = renderCalendar();
   else if(sess.tab==='tt') html = renderTimetable();
   else if(sess.tab==='task') html = renderTasks();
+  else if(sess.tab==='proj') html = renderProjects();
   else if(sess.tab==='print') html = renderPrint();
   else if(sess.tab==='colony') html = renderColony();
   else if(sess.tab==='settings') html = renderSettings();
@@ -467,7 +479,7 @@ function bindLogin(){
     DB.user = {name, id};
     await save('user');
     seedIfEmpty();
-    await Promise.all(['events','tasks','timetable'].map(save));
+    await Promise.all(['events','tasks','timetable','projects'].map(save));
     sess.tab = 'cal';
     render();
   };
@@ -570,12 +582,13 @@ function renderTasks(){
 }
 function taskCard(t){
   const isDone = t.status==='DONE';
+  const proj = t.projectId? DB.projects.find(p=>p.id===t.projectId) : null;
   return `<div class="card ${isDone?'done':''} ${t.ai?'ai':''}" data-task="${t.id}">
     <div class="title-row">
       <div style="display:flex; gap:10px; align-items:flex-start; flex:1;">
         <div class="check ${isDone?'on':''}" data-toggle="${t.id}">${isDone? '済':''}</div>
         <div style="flex:1;">
-          <div class="label-row">${t.ai?'<span class="chip ai">AI取込</span>':''}</div>
+          <div class="label-row">${t.ai?'<span class="chip ai">AI取込</span>':''}${proj?`<span class="chip proj">${esc(proj.name)}</span>`:''}</div>
           <div class="item-title ${isDone?'strike':''}">${esc(t.title)}</div>
           ${t.description? `<div class="item-sub">${esc(t.description)}</div>`:''}
           ${t.dueAt? `<div class="item-sub">期限：${fmtDate(t.dueAt)}</div>`:''}
@@ -583,6 +596,46 @@ function taskCard(t){
       </div>
       <button class="link-btn" data-deltask="${t.id}">${ICONS.trash}</button>
     </div>
+  </div>`;
+}
+
+/* ============ PROJECTS ============ */
+function renderProjects(){
+  if(sess.projectDetail){
+    const p = DB.projects.find(x=>x.id===sess.projectDetail);
+    if(!p){ sess.projectDetail=null; return renderProjects(); }
+    const tasks = DB.tasks.filter(t=>t.projectId===p.id);
+    const done = tasks.filter(t=>t.status==='DONE').length;
+    const pct = tasks.length? Math.round(done/tasks.length*100) : 0;
+    return `
+      <button class="link-btn" id="backProject">${ICONS.arrow} プロジェクト一覧へ</button>
+      <div class="title-row" style="align-items:center; margin-top:10px;">
+        <div style="font-family:'Shippori Mincho',serif; font-weight:800; font-size:19px;">${esc(p.name)}</div>
+        <button class="link-btn" id="editProject">編集</button>
+      </div>
+      ${p.description? `<div class="item-sub" style="margin-bottom:10px;">${esc(p.description)}</div>`:''}
+      <div class="item-sub">進捗　${done} / ${tasks.length}（${pct}%）</div>
+      <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
+      <div class="section-label" style="margin-top:18px;">タスク</div>
+      ${tasks.length? tasks.map(taskCard).join('') : emptyState('このプロジェクトのタスクはまだありません')}
+      <button class="btn ghost" id="addTaskToProject">このプロジェクトにタスクを追加</button>
+      <button class="btn ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" id="delProject">プロジェクトを削除</button>
+    `;
+  }
+  return `
+    <div class="section-label">プロジェクト一覧</div>
+    ${DB.projects.length? DB.projects.map(projectCard).join('') : emptyState('プロジェクトはまだありません')}
+    <button class="fab" id="addProjectFab">${ICONS.plus}</button>
+  `;
+}
+function projectCard(p){
+  const tasks = DB.tasks.filter(t=>t.projectId===p.id);
+  const done = tasks.filter(t=>t.status==='DONE').length;
+  const pct = tasks.length? Math.round(done/tasks.length*100) : 0;
+  return `<div class="card" data-project="${p.id}">
+    <div class="title-row"><div class="item-title">${esc(p.name)}</div><span class="chip proj">${done}/${tasks.length}</span></div>
+    ${p.description? `<div class="item-sub">${esc(p.description)}</div>`:''}
+    <div class="progress-track"><div class="progress-fill" style="width:${pct}%;"></div></div>
   </div>`;
 }
 
@@ -752,11 +805,27 @@ function modalContent(){
   }
   if(m.kind==='task'){
     const t = m.data||{};
+    const presetProjectId = m.projectId || t.projectId || '';
     return `
       <h3>タスクを追加</h3>
       <div class="field"><label class="f">タイトル</label><input type="text" id="m-title" value="${esc(t.title||'')}"></div>
       <div class="field"><label class="f">説明</label><textarea id="m-desc" rows="2">${esc(t.description||'')}</textarea></div>
       <div class="field"><label class="f">期限</label><input type="date" id="m-date" value="${t.dueAt||todayStr()}"></div>
+      <div class="field"><label class="f">プロジェクト</label>
+        <select id="m-project">
+          <option value="">なし</option>
+          ${DB.projects.map(p=>`<option value="${p.id}" ${presetProjectId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
+        </select>
+      </div>
+      <button class="btn hanko" id="m-save">保存する</button>
+    `;
+  }
+  if(m.kind==='project'){
+    const p = m.data||{};
+    return `
+      <h3>${m.data? 'プロジェクトを編集':'プロジェクトを作成'}</h3>
+      <div class="field"><label class="f">名前</label><input type="text" id="m-pname" value="${esc(p.name||'')}" placeholder="例）文化祭 実行委員"></div>
+      <div class="field"><label class="f">説明</label><textarea id="m-pdesc" rows="2" placeholder="任意">${esc(p.description||'')}</textarea></div>
       <button class="btn hanko" id="m-save">保存する</button>
     `;
   }
@@ -819,6 +888,30 @@ function bindScreen(){
     el.onclick = async ()=>{ DB.tasks = DB.tasks.filter(x=>x.id!==el.dataset.deltask); await save('tasks'); render(); };
   });
 
+  // projects
+  const addProjectFab = document.getElementById('addProjectFab');
+  if(addProjectFab) addProjectFab.onclick = ()=>{ sess.modal={kind:'project', data:null}; renderModal(); };
+  document.querySelectorAll('[data-project]').forEach(el=>{
+    el.onclick = ()=>{ sess.projectDetail = el.dataset.project; render(); };
+  });
+  const backProject = document.getElementById('backProject');
+  if(backProject) backProject.onclick = ()=>{ sess.projectDetail=null; render(); };
+  const editProject = document.getElementById('editProject');
+  if(editProject) editProject.onclick = ()=>{
+    const p = DB.projects.find(x=>x.id===sess.projectDetail);
+    sess.modal={kind:'project', data:p}; renderModal();
+  };
+  const addTaskToProject = document.getElementById('addTaskToProject');
+  if(addTaskToProject) addTaskToProject.onclick = ()=>{ sess.modal={kind:'task', data:null, projectId:sess.projectDetail}; renderModal(); };
+  const delProject = document.getElementById('delProject');
+  if(delProject) delProject.onclick = async ()=>{
+    const pid = sess.projectDetail;
+    DB.projects = DB.projects.filter(x=>x.id!==pid);
+    DB.tasks.forEach(t=>{ if(t.projectId===pid) t.projectId=null; });
+    await Promise.all(['projects','tasks'].map(save));
+    sess.projectDetail=null; render(); toast('プロジェクトを削除しました');
+  };
+
   // print flow
   const dz = document.getElementById('dropzone');
   const fi = document.getElementById('fileInput');
@@ -861,7 +954,7 @@ function bindScreen(){
     const chosen = sess.printFlow.candidates.filter(c=>c.include);
     const printId = uid();
     chosen.forEach(c=>{
-      if(c.type==='task') DB.tasks.push({id:uid(), title:c.title, description:'', dueAt:c.date, status:'OPEN', ai:true, sourcePrintId:printId});
+      if(c.type==='task') DB.tasks.push({id:uid(), title:c.title, description:'', dueAt:c.date, status:'OPEN', ai:true, sourcePrintId:printId, projectId:null});
       else DB.events.push({id:uid(), title:c.title, description:'', startAt:c.date+'T'+(c.time||'09:00'), allDay:false, sourcePrintId:printId});
     });
     await Promise.all(['tasks','events'].map(save));
@@ -915,8 +1008,17 @@ function bindModal(){
     if(m.kind==='task'){
       const title = document.getElementById('m-title').value.trim();
       if(!title){ toast('タイトルを入力してください'); return; }
-      DB.tasks.push({id:uid(), title, description:document.getElementById('m-desc').value, dueAt:document.getElementById('m-date').value, status:'OPEN', ai:false});
+      const projectId = document.getElementById('m-project').value || null;
+      DB.tasks.push({id:uid(), title, description:document.getElementById('m-desc').value, dueAt:document.getElementById('m-date').value, status:'OPEN', ai:false, projectId});
       await save('tasks');
+    }
+    if(m.kind==='project'){
+      const name = document.getElementById('m-pname').value.trim();
+      if(!name){ toast('名前を入力してください'); return; }
+      const description = document.getElementById('m-pdesc').value;
+      if(m.data){ Object.assign(m.data, {name, description}); }
+      else DB.projects.push({id:uid(), name, description, createdAt:todayStr()});
+      await save('projects');
     }
     if(m.kind==='ttcell'){
       const [d,p] = m.key.split('_');
