@@ -431,7 +431,7 @@ const ICONS = {
 };
 
 /* ============ STATE ============ */
-let DB = { events:[], tasks:[], timetable:[], colonies:[], projects:[], user:null };
+let DB = { events:[], tasks:[], timetable:[], colonies:[], projects:[], user:null, token:null };
 let sess = { tab:'cal', selectedDate: todayStr(), calMonth:new Date(), calView:'month', modal:null, printFlow:null, query:'' };
 
 function uid(){ return 'id_'+Math.random().toString(36).slice(2,10); }
@@ -538,6 +538,36 @@ async function api(method, path, body){
   return json?.data;
 }
 
+// サーバーの返すコードを、その場で読める言葉にする。
+function loginError(e, mode){
+  if(e.status===401) return 'メールアドレスかパスワードが違います';
+  if(e.status===409) return 'そのメールアドレスは登録済みです。ログインしてください';
+  if(e.status===400) return mode==='register'
+    ? 'メールアドレスの形式か、パスワードの長さを確かめてください'
+    : '入力を確かめてください';
+  return 'サーバーに繋がりませんでした';
+}
+
+// 画像はそのままの形で送る。JSON に包んで base64 にすると容量が 1.3 倍になる。
+async function apiBinary(method, path, body){
+  const res = await fetch(API_BASE+path, {
+    method,
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      ...(AUTH.token  ? {'Authorization':'Bearer '+AUTH.token} : {}),
+      ...(AUTH.userId ? {'X-User-ID': AUTH.userId} : {}),
+    },
+    body,
+  });
+  const json = await res.json().catch(()=>null);
+  if(!res.ok){
+    const err = new Error(json?.error?.code || String(res.status));
+    err.code = json?.error?.code; err.status = res.status;
+    throw err;
+  }
+  return json?.data;
+}
+
 async function probeServer(){
   try{
     const res = await fetch(API_ORIGIN + '/healthz', {method:'GET'});
@@ -589,13 +619,25 @@ function toServerTask(t){
 }
 
 const Server = {
-  async login(userId, name){
-    const s = await api('POST','/auth/sessions', {userId, name});
-    AUTH = { userId: s.userId, token: s.token };
-    return s;
+  async register(email, password, displayName){
+    const out = await api('POST','/auth/register', {email, password, displayName});
+    AUTH = { userId: out.user.id, token: out.token };
+    return out;
+  },
+  async signIn(email, password){
+    const out = await api('POST','/auth/login', {email, password});
+    AUTH = { userId: out.user.id, token: out.token };
+    return out;
+  },
+  // 開き直したときに、保存しておいたトークンがまだ生きているか確かめる。
+  async resume(token){
+    AUTH = { userId:null, token };
+    const me = await api('GET','/auth/me');
+    AUTH = { userId: me.id, token };
+    return me;
   },
   async logout(){
-    if(AUTH.token) await api('DELETE','/auth/sessions/'+encodeURIComponent(AUTH.token)).catch(()=>{});
+    if(AUTH.token) await api('POST','/auth/logout').catch(()=>{});
     AUTH = { userId:null, token:null };
   },
   async pull(){
@@ -665,7 +707,7 @@ const STORE = window.storage || {
 };
 
 async function loadAll(){
-  const keys = ['events','tasks','timetable','colonies','projects','user'];
+  const keys = ['events','tasks','timetable','colonies','projects','user','token'];
   for(const k of keys){
     try{
       const r = await STORE.get(k, false);
@@ -778,7 +820,11 @@ function render(){
 
 /* ============ LOGIN ============ */
 function renderLogin(){
-  return `
+  // サーバーがいるならメールとパスワードで入る。いないときは端末内だけの
+  // 「おためし」で、名前だけで始められる。
+  const mode = sess.loginMode || 'login';
+  if(!ONLINE){
+    return `
   <div style="padding:60px 30px 30px; display:flex; flex-direction:column; height:844px;">
     <div style="flex:1;">
       <div style="font-family:'Shippori Mincho',serif; font-size:26px; font-weight:800; margin-bottom:6px;">他力本願<br>カレンダー</div>
@@ -787,35 +833,77 @@ function renderLogin(){
         <label class="f">なまえ</label>
         <input type="text" id="li-name" placeholder="例）山田 太郎">
       </div>
-      <div class="field">
-        <label class="f">ID（任意・空でも可）</label>
-        <input type="text" id="li-id" placeholder="user-1">
-      </div>
       <button class="btn hanko" id="li-btn">はじめる</button>
     </div>
-    <div style="text-align:center; font-size:10px; color:var(--ink-soft);">※ プロトタイプ版：データは端末内にのみ保存されます</div>
+    <div style="text-align:center; font-size:10px; color:var(--ink-soft); line-height:1.7;">
+      サーバーに繋がっていません。<br>データはこの端末の中だけに保存されます。
+    </div>
+  </div>`;
+  }
+  return `
+  <div style="padding:56px 30px 30px; display:flex; flex-direction:column; height:844px;">
+    <div style="flex:1;">
+      <div style="font-family:'Shippori Mincho',serif; font-size:26px; font-weight:800; margin-bottom:6px;">他力本願<br>カレンダー</div>
+      <div style="color:var(--ink-soft); font-size:13px; margin-bottom:28px; line-height:1.7;">プリントは撮るだけ。あとは他力本願で。<br>AIが予定とタスクに仕分けます。</div>
+      <div class="filter-row">
+        <button class="filter-chip ${mode==='login'?'on':''}" data-mode="login">ログイン</button>
+        <button class="filter-chip ${mode==='register'?'on':''}" data-mode="register">はじめて使う</button>
+      </div>
+      ${mode==='register' ? `
+      <div class="field">
+        <label class="f">なまえ</label>
+        <input type="text" id="li-name" placeholder="例）山田 太郎" autocomplete="name">
+      </div>` : ''}
+      <div class="field">
+        <label class="f">メールアドレス</label>
+        <input type="text" id="li-email" placeholder="you@example.com" autocomplete="username" inputmode="email">
+      </div>
+      <div class="field">
+        <label class="f">パスワード${mode==='register'?'（8文字以上）':''}</label>
+        <input type="password" id="li-pass" autocomplete="${mode==='register'?'new-password':'current-password'}">
+      </div>
+      <div class="item-sub" id="li-error" style="color:var(--danger); min-height:18px; margin-bottom:10px;"></div>
+      <button class="btn hanko" id="li-btn">${mode==='register'?'アカウントを作る':'ログイン'}</button>
+    </div>
+    <div style="text-align:center; font-size:10px; color:var(--ink-soft);">サーバーに接続しています</div>
   </div>`;
 }
 function bindLogin(){
-  document.getElementById('li-btn').onclick = async ()=>{
-    const name = document.getElementById('li-name').value.trim() || 'ゲスト';
-    const id = document.getElementById('li-id').value.trim() || uid();
-    DB.user = {name, id};
+  document.querySelectorAll('[data-mode]').forEach(el=>{
+    el.onclick = ()=>{ sess.loginMode = el.dataset.mode; render(); };
+  });
 
+  document.getElementById('li-btn').onclick = async ()=>{
     if(ONLINE){
-      // サーバーがいるなら、そこにセッションを作って中身を引いてくる。
-      const ok = await withServer(async ()=>{
-        await Server.login(id, name);
-        await Server.pull();
-        return true;
-      });
-      if(ok){
-        await save('user');
-        await Promise.all(SERVER_KEYS.map(save));
-        sess.tab='cal'; render(); toast(`${name} さんでログインしました`);
+      const mode  = sess.loginMode || 'login';
+      const email = document.getElementById('li-email').value.trim();
+      const pass  = document.getElementById('li-pass').value;
+      const name  = document.getElementById('li-name')?.value.trim() || '';
+      const fail  = (msg)=>{ document.getElementById('li-error').textContent = msg; };
+
+      if(!email || !pass){ fail('メールアドレスとパスワードを入れてください'); return; }
+      if(mode==='register' && pass.length < 8){ fail('パスワードは8文字以上にしてください'); return; }
+
+      let out;
+      try{
+        out = mode==='register'
+          ? await Server.register(email, pass, name)
+          : await Server.signIn(email, pass);
+      }catch(e){
+        fail(loginError(e, mode));
         return;
       }
+      DB.user = {id: out.user.id, name: out.user.displayName};
+      DB.token = out.token;
+      await withServer(()=>Server.pull());
+      await Promise.all(['user','token', ...SERVER_KEYS].map(save));
+      sess.tab='cal'; render(); toast(`${DB.user.name} さんでログインしました`);
+      return;
     }
+
+    // サーバーがいないときは、この端末の中だけのおためし。
+    const name = document.getElementById('li-name').value.trim() || 'ゲスト';
+    DB.user = {name, id: uid()};
     await save('user');
     seedIfEmpty();
     await Promise.all(['events','tasks','timetable','projects'].map(save));
@@ -1137,6 +1225,28 @@ function renderPrint(){
       <div class="item-sub" style="text-align:center;">しばらくお待ちください…</div>
     `;
   }
+  if(flow.step==='failed'){
+    return `
+      <img class="preview-img" src="${flow.imgSrc}" style="max-height:140px;">
+      <div class="label-row"><span class="chip late">FAILED</span></div>
+      <div class="item-title" style="margin-bottom:6px;">読み取れませんでした</div>
+      <div class="item-sub" style="margin-bottom:18px; line-height:1.7;">${esc(flow.reason||'')}</div>
+      <button class="btn hanko" id="retryBtn">もう一度解析する</button>
+      <button class="btn ghost" style="margin-top:8px;" id="cancelFlow">やめる</button>
+    `;
+  }
+  if(flow.step==='review' && !flow.candidates.length){
+    return `
+      <img class="preview-img" src="${flow.imgSrc}" style="max-height:140px;">
+      <div class="item-title" style="margin-bottom:6px;">日付は見つかりませんでした</div>
+      <div class="item-sub" style="margin-bottom:18px; line-height:1.7;">
+        このプリントからは、予定もタスクも読み取れませんでした。
+        日付がはっきり写るように撮り直すと拾えることがあります。
+      </div>
+      <button class="btn hanko" id="retryBtn">もう一度解析する</button>
+      <button class="btn ghost" style="margin-top:8px;" id="cancelFlow">やめる</button>
+    `;
+  }
   if(flow.step==='review'){
     return `
       <div class="label-row"><span class="chip ai">REVIEW_REQUIRED</span></div>
@@ -1174,13 +1284,40 @@ function renderPrint(){
   }
 }
 
-function mockCandidates(){
-  const plus = (n)=>addDays(todayStr(), n);
-  return [
-    {type:'task', title:'数学プリント 応用問題 p.24', date:plus(5), include:true},
-    {type:'event', title:'PTA全体保護者会', date:plus(9), time:'10:00', include:true},
-    {type:'task', title:'理科 実験レポート提出', date:plus(3), include:true},
-  ];
+// プリントを実際にサーバーへ送って読み取ってもらう。
+// ジョブを立ててから画像を送る二段構えなのは、途中で落ちたときに
+// 何が起きたのかを後から辿れるようにするため。
+async function runAnalysis(){
+  const flow = sess.printFlow;
+  sess.printFlow = {...flow, step:'processing', sub:0};
+  render();
+
+  try{
+    const job = await api('POST','/uploads/jobs',
+      {contentType: flow.contentType || 'image/png', filename: flow.filename || 'print'});
+    sess.printFlow = {...sess.printFlow, jobId: job.id, sub:1};
+    render();
+    // 画像を送っている間が読み取り中。
+    sess.printFlow = {...sess.printFlow, sub:2};
+    const out = await apiBinary('POST', `/uploads/jobs/${job.id}/analyse`, flow.bytes);
+    if(out.job.status === 'failed'){
+      sess.printFlow = {...sess.printFlow, step:'failed', reason: out.job.resultSummary};
+      render();
+      return;
+    }
+    sess.printFlow = {
+      ...sess.printFlow, step:'review',
+      candidates: (out.candidates||[]).map(c=>({...c, include:true})),
+    };
+    render();
+  }catch(e){
+    sess.printFlow = {
+      ...sess.printFlow, step:'failed',
+      reason: e.status===413 ? '画像が大きすぎます（10MBまで）'
+                             : 'サーバーに繋がりませんでした',
+    };
+    render();
+  }
 }
 
 /* ============ COLONY ============ */
@@ -1524,24 +1661,23 @@ function bindScreen(){
   if(fi) fi.onchange = ()=>{
     const file = fi.files[0]; if(!file) return;
     const reader = new FileReader();
-    reader.onload = ()=>{ sess.printFlow = {step:'preview', imgSrc:reader.result}; render(); };
+    reader.onload = async ()=>{
+      sess.printFlow = {
+        step:'preview', imgSrc:reader.result,
+        bytes: await file.arrayBuffer(),
+        contentType: file.type || 'image/png',
+        filename: file.name || 'print',
+      };
+      render();
+    };
     reader.readAsDataURL(file);
   };
   const cancelFlow = document.getElementById('cancelFlow');
   if(cancelFlow) cancelFlow.onclick = ()=>{ sess.printFlow=null; render(); };
   const startAnalysis = document.getElementById('startAnalysis');
-  if(startAnalysis) startAnalysis.onclick = ()=>{
-    sess.printFlow = {...sess.printFlow, step:'processing', sub:0};
-    render();
-    setTimeout(()=>{ sess.printFlow.sub=1; render(); },500);
-    setTimeout(()=>{ sess.printFlow.sub=2; render(); },1400);
-    setTimeout(()=>{ sess.printFlow = {...sess.printFlow, step:'review', candidates:mockCandidates()}; render(); },2600);
-  };
+  if(startAnalysis) startAnalysis.onclick = runAnalysis;
   const retryBtn = document.getElementById('retryBtn');
-  if(retryBtn) retryBtn.onclick = ()=>{ sess.printFlow.step='processing'; sess.printFlow.sub=1; render();
-    setTimeout(()=>{ sess.printFlow.sub=2; render(); },800);
-    setTimeout(()=>{ sess.printFlow = {...sess.printFlow, step:'review', candidates:mockCandidates()}; render(); },1800);
-  };
+  if(retryBtn) retryBtn.onclick = runAnalysis;
   document.querySelectorAll('[data-cand-toggle]').forEach(el=>{
     el.onclick = ()=>{ const i=+el.dataset.candToggle; sess.printFlow.candidates[i].include = !sess.printFlow.candidates[i].include; render(); };
   });
@@ -1615,9 +1751,11 @@ function bindScreen(){
   const logoutBtn = document.getElementById('logoutBtn');
   if(logoutBtn) logoutBtn.onclick = async ()=>{
     await withServer(()=>Server.logout());
-    DB.user=null;
-    await save('user');            // 消しておかないと開き直しでログインが戻る
-    sess.tab='login'; render();
+    // 端末に残っているものも消す。次に開いたときログインが戻ってしまう。
+    DB.user = null; DB.token = null;
+    DB.events=[]; DB.tasks=[]; DB.timetable=[]; DB.colonies=[]; DB.projects=[];
+    await Promise.all(['user','token', ...SERVER_KEYS].map(save));
+    sess.tab='login'; sess.loginMode='login'; render();
   };
 }
 
@@ -1814,13 +1952,17 @@ function bindModal(){
 (async function init(){
   await loadAll();
   await probeServer();
-  // 前回ログインしたままなら、セッションを取り直して最新を引く。
-  if(ONLINE && DB.user){
-    await withServer(async ()=>{
-      await Server.login(DB.user.id, DB.user.name);
+  // 前回のトークンがまだ生きていればそのまま入る。切れていればログイン画面へ。
+  if(ONLINE && DB.token){
+    try{
+      const me = await Server.resume(DB.token);
+      DB.user = {id: me.id, name: me.displayName};
       await Server.pull();
       await Promise.all(SERVER_KEYS.map(save));
-    });
+    }catch(e){
+      DB.token = null; DB.user = null;
+      await Promise.all(['token','user'].map(save));
+    }
   }
   render();
 })();
