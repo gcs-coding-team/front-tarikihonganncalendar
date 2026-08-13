@@ -92,7 +92,7 @@ npm run test:server   # API を立ててから（27 + 37項目）
 [docs/deploy.md](https://github.com/gcs-coding-team/tarikihonganncalendar/blob/main/docs/deploy.md)
 を参照。
 
-**URL**：http://163.43.230.242/
+**URL**：https://163-43-230-242.sslip.io/
 
 ### デモアカウント
 
