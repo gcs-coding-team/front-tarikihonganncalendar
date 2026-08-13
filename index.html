@@ -197,6 +197,7 @@ body{
 .btn.hanko{background:var(--hanko); border-color:var(--hanko);}
 .btn:active{transform:scale(.985); opacity:.9;}
 .btn:disabled{opacity:.4; cursor:default;}
+.btn svg{width:16px; height:16px; vertical-align:-3px; margin-right:5px; stroke:currentColor; fill:none;}
 
 input[type=text], input[type=date], input[type=time], input[type=password], textarea, select{
   width:100%; font-family:inherit; font-size:15px;
@@ -526,6 +527,7 @@ const ICONS = {
   trash: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h16M9 7V4.6c0-.6.5-1.1 1.1-1.1h3.8c.6 0 1.1.5 1.1 1.1V7M18 7l-.8 12.2A2 2 0 0 1 15.2 21H8.8a2 2 0 0 1-2-1.8L6 7"/></svg>`,
   folder: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 6.6a1.6 1.6 0 0 1 1.6-1.6h4.3l2.1 2.3h7.4a1.6 1.6 0 0 1 1.6 1.6v8.9a1.6 1.6 0 0 1-1.6 1.6H5.1a1.6 1.6 0 0 1-1.6-1.6V6.6z"/></svg>`,
   search: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.3"/><path d="M15.6 15.6L20.5 20.5"/></svg>`,
+  help: `<svg viewBox="0 0 24 24" fill="none" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.2a2.5 2.5 0 0 1 4.8 1c0 1.6-2.3 1.9-2.3 3.6"/><circle cx="12" cy="16.8" r="0.15" fill="currentColor" stroke-width="1"/></svg>`,
 };
 
 /* ============ STATE ============ */
@@ -1643,6 +1645,7 @@ function renderColony(){
 /* ============ SETTINGS ============ */
 function renderSettings(){
   return `
+    <button class="btn ghost" id="helpBtn">${ICONS.help} 使い方ガイド</button>
     <div class="section-label">プロフィール</div>
     <div class="card">
       <div class="title-row">
@@ -1882,6 +1885,24 @@ function modalContent(){
           <div class="item-title">${esc(t.title)}</div>
           ${t.dueAt? `<div class="item-sub">期限：${fmtDate(t.dueAt)}</div>`:''}
         </div>`).join('')}
+    `;
+  }
+  if(m.kind==='help'){
+    const item = (title, body)=>`
+      <div class="card">
+        <div class="item-title">${title}</div>
+        <div class="item-sub" style="margin-top:6px; line-height:1.7;">${body}</div>
+      </div>`;
+    return `
+      <h3>使い方ガイド</h3>
+      ${item('カレンダー', '月・週・日の3つの表示を切り替えられます。日付をタップすると、その日の予定が下に出ます。右下の＋ボタンで新しい予定を追加できます。')}
+      ${item('時間割', '空いているマスをタップして授業を登録します。登録すると、その曜日のカレンダーに自動で授業が並びます。')}
+      ${item('タスク', '締め切りのあるやること。チェックで完了、右下の＋で追加。今日・明日が締め切りのものはカレンダー画面の上にも出ます。')}
+      ${item('プロジェクト', '文化祭の準備のような、複数のタスクをまとめる入れ物です。プロジェクトを開くと、進み具合（完了/全体）が見られます。')}
+      ${item('プリント（AI取込）', '配布されたプリントを撮影すると、AIが予定・タスクの候補を読み取ります。内容を確認・修正してから登録するので、間違って登録されることはありません。CPUのみのサーバーだと1枚数十秒〜数分かかります。')}
+      ${item('コロニー', 'クラスや部活など、他の人と予定・タスクを共有するグループです。作成すると招待コードが発行され、それを使って他の人が参加できます。')}
+      ${item('設定', 'なまえ・メールアドレス・パスワードの変更、週の始まりやカレンダーの初期表示、データのエクスポートなどができます。')}
+      <button class="btn ghost" id="m-close">閉じる</button>
     `;
   }
   if(m.kind==='displayName'){
@@ -2151,6 +2172,8 @@ function bindScreen(){
     sess.tab='login'; sess.loginMode='login'; render();
   };
 
+  const helpBtn = document.getElementById('helpBtn');
+  if(helpBtn) helpBtn.onclick = ()=>{ sess.modal={kind:'help'}; renderModal(); };
   const editNameBtn = document.getElementById('editNameBtn');
   if(editNameBtn) editNameBtn.onclick = ()=>{ sess.modal={kind:'displayName'}; renderModal(); };
   const changeEmailBtn = document.getElementById('changeEmailBtn');
@@ -2195,6 +2218,8 @@ function bindModal(){
   const m = sess.modal;
   const saveBtn = document.getElementById('m-save');
   const delBtn = document.getElementById('m-del');
+  const closeBtn = document.getElementById('m-close');
+  if(closeBtn) closeBtn.onclick = ()=>{ sess.modal=null; render(); };
 
   // 終日にしたら時刻欄は要らないので隠す
   const allDayBox = document.getElementById('m-allday');
