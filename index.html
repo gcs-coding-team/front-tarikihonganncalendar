@@ -1492,6 +1492,27 @@ function renderPrint(){
 }
 
 // プリントを実際にサーバーへ送って読み取ってもらう。
+// スマホの写真は3000〜4000px・数MBあることが多いが、AIが実際に見るのは
+// もっと粗い解像度で十分。大きいまま送ると、サーバー側での画像の読み込みと
+// エンコードだけで数秒〜十数秒よけいにかかる。長辺1600pxまで縮めてJPEGに
+// 詰め直してから送ることで、文字の読み取りやすさはほぼ変えずに時間を削る。
+async function shrinkImage(file, maxDim=1600, quality=0.85){
+  if(!('createImageBitmap' in window)) return null;
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  // 既に小さい画像を無理に再エンコードすると、むしろ画質が落ちるだけ。
+  if(scale === 1 && file.size <= 1.5*1024*1024){ bitmap.close?.(); return null; }
+  const w = Math.max(1, Math.round(bitmap.width*scale));
+  const h = Math.max(1, Math.round(bitmap.height*scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w; canvas.height = h;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  const blob = await new Promise(res=>canvas.toBlob(res, 'image/jpeg', quality));
+  if(!blob) return null;
+  return { blob, bytes: await blob.arrayBuffer(), contentType:'image/jpeg' };
+}
+
 // ジョブを立ててから画像を送る二段構えなのは、途中で落ちたときに
 // 何が起きたのかを後から辿れるようにするため。
 async function runAnalysis(){
@@ -1881,19 +1902,17 @@ function bindScreen(){
   const dz = document.getElementById('dropzone');
   const fi = document.getElementById('fileInput');
   if(dz) dz.onclick = ()=> fi.click();
-  if(fi) fi.onchange = ()=>{
+  if(fi) fi.onchange = async ()=>{
     const file = fi.files[0]; if(!file) return;
-    const reader = new FileReader();
-    reader.onload = async ()=>{
-      sess.printFlow = {
-        step:'preview', imgSrc:reader.result,
-        bytes: await file.arrayBuffer(),
-        contentType: file.type || 'image/png',
-        filename: file.name || 'print',
-      };
-      render();
+    const shrunk = await shrinkImage(file).catch(()=>null);
+    sess.printFlow = {
+      step:'preview',
+      imgSrc: URL.createObjectURL(shrunk? shrunk.blob : file),
+      bytes: shrunk? shrunk.bytes : await file.arrayBuffer(),
+      contentType: shrunk? shrunk.contentType : (file.type || 'image/png'),
+      filename: file.name || 'print',
     };
-    reader.readAsDataURL(file);
+    render();
   };
   const cancelFlow = document.getElementById('cancelFlow');
   if(cancelFlow) cancelFlow.onclick = ()=>{ sess.printFlow=null; render(); };
