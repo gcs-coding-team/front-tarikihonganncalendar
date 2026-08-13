@@ -94,7 +94,6 @@ body{
   flex:1;
   overflow-y:auto;
   padding:16px 16px 90px;
-  position:relative;
 }
 .main::-webkit-scrollbar{width:0;}
 
@@ -304,6 +303,16 @@ label.f{font-size:11.5px; color:var(--ink-soft); display:block; margin-bottom:5p
   position:absolute; top:-4px; right:-6px; background:var(--hanko); color:white;
   font-size:9px; border-radius:8px; padding:1px 5px; font-weight:700;
 }
+/* 解析が裏で進んでいる間、タブを離れても「まだ動いている」と分かるように。 */
+.tab-busy{
+  position:absolute; top:2px; left:calc(50% + 7px); width:8px; height:8px;
+  border-radius:50%; background:var(--pen-blue); box-shadow:0 0 0 2px var(--paper);
+  animation:tabpulse 1.1s ease-in-out infinite;
+}
+@keyframes tabpulse{ 0%,100%{opacity:1; transform:scale(1);} 50%{opacity:.4; transform:scale(.7);} }
+@media (min-width:760px){
+  .tab-busy{ top:9px; left:auto; right:10px; }
+}
 .candidate{border:1px solid var(--line); border-radius:14px; padding:12px; margin-bottom:8px; background:var(--white);}
 .candidate .top{display:flex; gap:8px; align-items:flex-start;}
 .candidate input[type=text]{margin-bottom:6px;}
@@ -418,7 +427,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
   .frame.auth-mode{ grid-template-columns:1fr; }
 
   .topbar{ grid-column:2; grid-row:1; padding:24px 32px 16px; }
-  .main{ grid-column:2; grid-row:2; padding:8px 32px 40px; max-width:920px; }
+  .main{ grid-column:2; grid-row:2; padding:8px 32px 40px; max-width:920px; margin:0 auto; width:100%; }
   .frame.auth-mode .main{ grid-column:1; max-width:none; padding:0; }
 
   /* side rail */
@@ -441,6 +450,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
     padding:6px 12px 20px;
   }
   .tab{
+    flex:none;
     flex-direction:row;
     justify-content:flex-start;
     gap:11px;
@@ -904,9 +914,12 @@ function render(){
   titleEl.textContent = TITLES[sess.tab];
   idxEl.textContent = IDXMAP[sess.tab];
 
+  // 解析はどのタブを見ていても裏で進む。プリント以外を見ていても気付けるように、
+  // 処理中だけタブに小さな印を出す。
+  const printBusy = sess.printFlow && sess.printFlow.step==='processing';
   tabbar.innerHTML = TABS.map(t=>`
     <button class="tab ${sess.tab===t.k?'active':''}" data-tab="${t.k}">
-      ${t.icon}<span>${t.label}</span>
+      ${t.icon}<span>${t.label}</span>${t.k==='print' && printBusy && sess.tab!=='print' ? '<span class="tab-busy"></span>' : ''}
     </button>`).join('');
   tabbar.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{ sess.tab=b.dataset.tab; sess.modal=null; render(); });
 
@@ -1531,6 +1544,7 @@ async function runAnalysis(){
     if(out.job.status === 'failed'){
       sess.printFlow = {...sess.printFlow, step:'failed', reason: out.job.resultSummary};
       render();
+      if(sess.tab!=='print') toast('プリントの読み取りに失敗しました');
       return;
     }
     sess.prints = null;   // 新しく1枚増えたので取り直す
@@ -1539,6 +1553,8 @@ async function runAnalysis(){
       candidates: (out.candidates||[]).map(c=>({...c, include:true})),
     };
     render();
+    // 待っている間に別のタブを見ていたかもしれないので、終わったことを教える。
+    if(sess.tab!=='print') toast('プリントの読み取りが終わりました');
   }catch(e){
     sess.printFlow = {
       ...sess.printFlow, step:'failed',
@@ -1546,6 +1562,7 @@ async function runAnalysis(){
                              : 'サーバーに繋がりませんでした',
     };
     render();
+    if(sess.tab!=='print') toast('プリントの読み取りに失敗しました');
   }
 }
 
