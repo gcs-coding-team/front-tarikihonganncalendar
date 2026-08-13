@@ -172,7 +172,10 @@ body{
 .section-label::after{content:""; flex:1; border-bottom:1px solid var(--line);}
 
 .fab{
-  position:absolute; right:18px; bottom:calc(18px + env(safe-area-inset-bottom, 0px));
+  /* bottom clears the tab bar (~71px tall) plus a gap — the FAB now anchors to
+     the whole window, not just .main, so it has to account for the tab bar
+     itself rather than relying on .main's box ending above it. */
+  position:absolute; right:18px; bottom:calc(85px + env(safe-area-inset-bottom, 0px));
   width:54px; height:54px; border-radius:50%;
   background:var(--hanko); color:var(--white);
   display:flex; align-items:center; justify-content:center;
@@ -543,6 +546,15 @@ function addDays(s,n){ const d=parseDate(s); d.setDate(d.getDate()+n); return ym
 const DOW_JP = ['日','月','火','水','木','金','土'];
 function fmtDate(s){ const d=parseDate(s); return `${d.getMonth()+1}/${d.getDate()}(${DOW_JP[d.getDay()]})`; }
 
+// 表示・使い勝手の設定。サーバーには置かない — この端末だけの好みなので。
+let PREFS = { weekStart:'sun', defaultView:'month' };
+// 月曜始まりのときだけ、曜日の数え方を1つずらす。JSのgetDay()は常に日曜=0。
+function weekStartOffset(){ return PREFS.weekStart==='mon' ? 1 : 0; }
+function orderedDow(){
+  const off = weekStartOffset();
+  return DOW_JP.slice(off).concat(DOW_JP.slice(0,off));
+}
+
 /* ============ 予定の組み立て ============ */
 // カレンダーに出る予定は3種類ある。手で入れた単発の予定、繰り返しのその日の分、
 // そして時間割から導いた授業。授業と繰り返しは実データとして増やさず、
@@ -809,6 +821,10 @@ const Server = {
   joinByCode:   (inviteCode)=>api('POST','/colonies/join', {inviteCode}),
   leaveColony:  (id)=>api('POST',`/colonies/${id}/leave`, {}),
   shareItem:    (colonyId, t)=>api('POST',`/colonies/${colonyId}/shared-items`, {sourceType:'TASK', sourceId:t.id, titleSnapshot:t.title}),
+  updateDisplayName: (name)=>api('PATCH','/auth/me', {displayName:name}),
+  changePassword: (currentPassword, newPassword)=>api('POST','/auth/change-password', {currentPassword, newPassword}),
+  changeEmail:    (currentPassword, newEmail)=>api('POST','/auth/change-email', {currentPassword, newEmail}),
+  deleteAccount:  (currentPassword)=>api('DELETE','/auth/me', {currentPassword}),
 };
 
 // サーバーが落ちていても操作を止めない。失敗したら端末内の変更だけ残す。
@@ -841,9 +857,16 @@ async function loadAll(){
     }catch(e){ /* not found yet, keep default */ }
   }
   if(!DB.events) DB.events=[]; if(!DB.tasks) DB.tasks=[]; if(!DB.timetable) DB.timetable=[]; if(!DB.colonies) DB.colonies=[]; if(!DB.projects) DB.projects=[];
+  try{
+    const r = await STORE.get('prefs', false);
+    if(r && r.value) PREFS = {...PREFS, ...JSON.parse(r.value)};
+  }catch(e){ /* keep defaults */ }
 }
 async function save(key){
   try{ await STORE.set(key, JSON.stringify(DB[key]), false); }catch(e){ console.error('save failed',key,e); }
+}
+async function savePrefs(){
+  try{ await STORE.set('prefs', JSON.stringify(PREFS), false); }catch(e){ console.error('save failed prefs',e); }
 }
 
 function toast(msg){
@@ -1111,7 +1134,7 @@ function bindLogin(){
         fail(loginError(e, mode));
         return;
       }
-      DB.user = {id: out.user.id, name: out.user.displayName};
+      DB.user = {id: out.user.id, name: out.user.displayName, email: out.user.email};
       DB.token = out.token;
       await withServer(()=>Server.pull());
       await Promise.all(['user','token', ...SERVER_KEYS].map(save));
@@ -1178,13 +1201,14 @@ function diffDays(a,b){ return Math.round((parseDate(b)-parseDate(a))/86400000);
 function renderMonthView(){
   const m = sess.calMonth;
   const y=m.getFullYear(), mo=m.getMonth();
-  const startPad = new Date(y,mo,1).getDay();
+  const off = weekStartOffset();
+  const startPad = (new Date(y,mo,1).getDay() - off + 7) % 7;
   const daysInMonth = new Date(y,mo+1,0).getDate();
   const cells=[];
   for(let i=0;i<startPad;i++) cells.push(null);
   for(let d=1; d<=daysInMonth; d++) cells.push(d);
 
-  let grid = `<div class="cal-grid">` + DOW_JP.map(d=>`<div class="cal-dow">${d}</div>`).join('');
+  let grid = `<div class="cal-grid">` + orderedDow().map(d=>`<div class="cal-dow">${d}</div>`).join('');
   cells.forEach(d=>{
     if(d===null){ grid+=`<div class="cal-day pad"></div>`; return; }
     const dateStr = `${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
@@ -1205,7 +1229,7 @@ function renderMonthView(){
 // 週表示。1日ずつ見出しを立てて、その日の予定をぶら下げる。
 function renderWeekView(){
   const base = parseDate(sess.selectedDate);
-  const start = addDays(sess.selectedDate, -base.getDay());   // その週の日曜
+  const start = addDays(sess.selectedDate, -((base.getDay() - weekStartOffset() + 7) % 7));
   const days = Array.from({length:7}, (_,i)=>addDays(start,i));
   const label = `${fmtDate(start)} 〜 ${fmtDate(days[6])}`;
   return `
@@ -1619,14 +1643,79 @@ function renderColony(){
 /* ============ SETTINGS ============ */
 function renderSettings(){
   return `
+    <div class="section-label">プロフィール</div>
     <div class="card">
-      <div class="item-sub">なまえ</div>
-      <div class="item-title">${esc(DB.user.name)}</div>
+      <div class="title-row">
+        <div>
+          <div class="item-sub">なまえ</div>
+          <div class="item-title">${esc(DB.user.name)}</div>
+        </div>
+        <button class="link-btn" id="editNameBtn">変更</button>
+      </div>
+    </div>
+    ${ONLINE ? `
+    <div class="card">
+      <div class="title-row">
+        <div>
+          <div class="item-sub">メールアドレス</div>
+          <div class="item-title">${esc(DB.user.email||'')}</div>
+        </div>
+        <button class="link-btn" id="changeEmailBtn">変更</button>
+      </div>
     </div>
     <div class="card">
       <div class="item-sub">ユーザーID</div>
       <div class="item-title">${esc(DB.user.id)}</div>
     </div>
+    <div class="section-label">セキュリティ</div>
+    <button class="btn ghost" id="changePasswordBtn">パスワードを変更</button>
+    ` : `
+    <div class="card">
+      <div class="item-sub">ユーザーID</div>
+      <div class="item-title">${esc(DB.user.id)}</div>
+    </div>
+    `}
+
+    <div class="section-label">表示・使い勝手</div>
+    <div class="card">
+      <div class="field" style="margin-bottom:10px;">
+        <label class="f">週の始まり</label>
+        <select id="prefWeekStart">
+          <option value="sun" ${PREFS.weekStart==='sun'?'selected':''}>日曜</option>
+          <option value="mon" ${PREFS.weekStart==='mon'?'selected':''}>月曜</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label class="f">カレンダーの初期表示</label>
+        <select id="prefDefaultView">
+          <option value="month" ${PREFS.defaultView==='month'?'selected':''}>月</option>
+          <option value="week"  ${PREFS.defaultView==='week' ?'selected':''}>週</option>
+          <option value="day"   ${PREFS.defaultView==='day'  ?'selected':''}>日</option>
+        </select>
+      </div>
+    </div>
+
+    ${DB.colonies.length ? `
+    <div class="section-label">所属コロニー（${DB.colonies.length}）</div>
+    ${DB.colonies.map(c=>`
+      <div class="card" data-settingscolony="${c.id}">
+        <div class="title-row">
+          <div class="item-title">${esc(c.name)}</div>
+          <span class="chip blue">${memberCount(c)}人</span>
+        </div>
+      </div>`).join('')}
+    ` : ''}
+
+    <div class="section-label">データ</div>
+    <div class="card">
+      <div class="item-sub" style="line-height:1.9;">
+        予定 ${DB.events.length} 件・タスク ${DB.tasks.length} 件・
+        プロジェクト ${DB.projects.length} 件・時間割 ${DB.timetable.length} コマ・
+        読み取ったプリント ${(sess.prints||[]).length} 枚
+      </div>
+    </div>
+    <button class="btn ghost" id="exportBtn" style="margin-top:10px;">データをエクスポート</button>
+
     <div class="section-label">サーバー</div>
     <div class="card">
       <div class="label-row">
@@ -1640,6 +1729,12 @@ function renderSettings(){
     </div>
     ${ONLINE? `<button class="btn ghost" id="syncBtn" style="margin-top:10px;">サーバーから引き直す</button>`:''}
     <button class="btn ghost" id="logoutBtn" style="margin-top:10px;">ログアウト</button>
+
+    ${ONLINE ? `
+    <div class="section-label">危険な操作</div>
+    <button class="btn ghost" style="color:var(--danger); border-color:var(--danger);" id="deleteAccountBtn">アカウントを削除</button>
+    ` : ''}
+
     <div class="item-sub" style="text-align:center; margin-top:24px;">他力本願カレンダー — プロトタイプ v0.1</div>
   `;
 }
@@ -1787,6 +1882,45 @@ function modalContent(){
           <div class="item-title">${esc(t.title)}</div>
           ${t.dueAt? `<div class="item-sub">期限：${fmtDate(t.dueAt)}</div>`:''}
         </div>`).join('')}
+    `;
+  }
+  if(m.kind==='displayName'){
+    return `
+      <h3>なまえを変更</h3>
+      <div class="field"><label class="f">なまえ</label><input type="text" id="m-newname" value="${esc(DB.user.name)}"></div>
+      <div class="item-sub" id="m-error" style="color:var(--danger); min-height:18px; margin-bottom:10px;"></div>
+      <button class="btn hanko" id="m-save">変更する</button>
+    `;
+  }
+  if(m.kind==='changeEmail'){
+    return `
+      <h3>メールアドレスを変更</h3>
+      <div class="field"><label class="f">新しいメールアドレス</label><input type="text" id="m-newemail" value="${esc(DB.user.email||'')}" inputmode="email"></div>
+      <div class="field"><label class="f">現在のパスワード</label><input type="password" id="m-curpass" autocomplete="current-password"></div>
+      <div class="item-sub" id="m-error" style="color:var(--danger); min-height:18px; margin-bottom:10px;"></div>
+      <button class="btn hanko" id="m-save">変更する</button>
+    `;
+  }
+  if(m.kind==='changePassword'){
+    return `
+      <h3>パスワードを変更</h3>
+      <div class="field"><label class="f">現在のパスワード</label><input type="password" id="m-curpass" autocomplete="current-password"></div>
+      <div class="field"><label class="f">新しいパスワード（8文字以上）</label><input type="password" id="m-newpass" autocomplete="new-password"></div>
+      <div class="item-sub" style="margin-bottom:10px; line-height:1.7;">変更すると、この端末以外でログインしていたセッションは全て切れます。</div>
+      <div class="item-sub" id="m-error" style="color:var(--danger); min-height:18px; margin-bottom:10px;"></div>
+      <button class="btn hanko" id="m-save">変更する</button>
+    `;
+  }
+  if(m.kind==='deleteAccount'){
+    return `
+      <h3>アカウントを削除</h3>
+      <div class="item-sub" style="margin-bottom:14px; line-height:1.7; color:var(--danger);">
+        予定・タスク・プロジェクト・時間割・読み取ったプリント・自分が作ったコロニーが、
+        すべて消えます。<b>元に戻せません。</b>
+      </div>
+      <div class="field"><label class="f">確認のため、パスワードを入れてください</label><input type="password" id="m-curpass" autocomplete="current-password"></div>
+      <div class="item-sub" id="m-error" style="color:var(--danger); min-height:18px; margin-bottom:10px;"></div>
+      <button class="btn ghost" style="color:var(--danger); border-color:var(--danger);" id="m-save">本当に削除する</button>
     `;
   }
   return '';
@@ -2016,6 +2150,45 @@ function bindScreen(){
     await Promise.all(['user','token', ...SERVER_KEYS].map(save));
     sess.tab='login'; sess.loginMode='login'; render();
   };
+
+  const editNameBtn = document.getElementById('editNameBtn');
+  if(editNameBtn) editNameBtn.onclick = ()=>{ sess.modal={kind:'displayName'}; renderModal(); };
+  const changeEmailBtn = document.getElementById('changeEmailBtn');
+  if(changeEmailBtn) changeEmailBtn.onclick = ()=>{ sess.modal={kind:'changeEmail'}; renderModal(); };
+  const changePasswordBtn = document.getElementById('changePasswordBtn');
+  if(changePasswordBtn) changePasswordBtn.onclick = ()=>{ sess.modal={kind:'changePassword'}; renderModal(); };
+  const deleteAccountBtn = document.getElementById('deleteAccountBtn');
+  if(deleteAccountBtn) deleteAccountBtn.onclick = ()=>{ sess.modal={kind:'deleteAccount'}; renderModal(); };
+
+  const prefWeekStart = document.getElementById('prefWeekStart');
+  if(prefWeekStart) prefWeekStart.onchange = async ()=>{
+    PREFS.weekStart = prefWeekStart.value; await savePrefs(); render();
+  };
+  const prefDefaultView = document.getElementById('prefDefaultView');
+  if(prefDefaultView) prefDefaultView.onchange = async ()=>{
+    PREFS.defaultView = prefDefaultView.value; await savePrefs(); toast('次にカレンダーを開いたときから反映されます');
+  };
+
+  document.querySelectorAll('[data-settingscolony]').forEach(el=>{
+    el.onclick = ()=>{ sess.tab='colony'; sess.colonyDetail=el.dataset.settingscolony; render(); };
+  });
+
+  const exportBtn = document.getElementById('exportBtn');
+  if(exportBtn) exportBtn.onclick = ()=>{
+    const dump = {
+      exportedAt: new Date().toISOString(),
+      user: {id:DB.user.id, name:DB.user.name},
+      events:DB.events, tasks:DB.tasks, projects:DB.projects,
+      timetable:DB.timetable, colonies:DB.colonies,
+    };
+    const blob = new Blob([JSON.stringify(dump, null, 2)], {type:'application/json'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `tariki-${todayStr()}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    toast('書き出しました');
+  };
 }
 
 function bindModal(){
@@ -2177,6 +2350,73 @@ function bindModal(){
       sess.modal=null; sess.colonyDetail=c.id; render(); toast(`${c.name} に参加しました`);
       return;
     }
+    if(m.kind==='displayName'){
+      const name = document.getElementById('m-newname').value.trim();
+      const fail = (msg)=>{ document.getElementById('m-error').textContent = msg; };
+      if(!name){ fail('なまえを入力してください'); return; }
+      if(!ONLINE){
+        DB.user.name = name; await save('user');
+        sess.modal=null; render(); toast('なまえを変更しました');
+        return;
+      }
+      try{ await Server.updateDisplayName(name); }
+      catch(e){ fail('サーバーに繋がりませんでした'); return; }
+      DB.user.name = name; await save('user');
+      sess.modal=null; render(); toast('なまえを変更しました');
+      return;
+    }
+    if(m.kind==='changeEmail'){
+      const email = document.getElementById('m-newemail').value.trim();
+      const pass  = document.getElementById('m-curpass').value;
+      const fail  = (msg)=>{ document.getElementById('m-error').textContent = msg; };
+      if(!email || !pass){ fail('メールアドレスとパスワードを入れてください'); return; }
+      try{
+        await Server.changeEmail(pass, email);
+      }catch(e){
+        fail(e.status===401 ? 'パスワードが違います'
+           : e.status===409 ? 'そのメールアドレスは別のアカウントで使われています'
+           : 'メールアドレスの形式を確かめてください');
+        return;
+      }
+      DB.user.email = email; await save('user');
+      sess.modal=null; render(); toast('メールアドレスを変更しました');
+      return;
+    }
+    if(m.kind==='changePassword'){
+      const cur = document.getElementById('m-curpass').value;
+      const next = document.getElementById('m-newpass').value;
+      const fail = (msg)=>{ document.getElementById('m-error').textContent = msg; };
+      if(!cur || !next){ fail('両方入力してください'); return; }
+      if(next.length < 8){ fail('新しいパスワードは8文字以上にしてください'); return; }
+      let out;
+      try{
+        out = await Server.changePassword(cur, next);
+      }catch(e){
+        fail(e.status===401 ? '現在のパスワードが違います' : 'パスワードの形式を確かめてください');
+        return;
+      }
+      DB.token = out.token; AUTH.token = out.token; await save('token');
+      sess.modal=null; render(); toast('パスワードを変更しました');
+      return;
+    }
+    if(m.kind==='deleteAccount'){
+      const pass = document.getElementById('m-curpass').value;
+      const fail = (msg)=>{ document.getElementById('m-error').textContent = msg; };
+      if(!pass){ fail('パスワードを入力してください'); return; }
+      try{
+        await Server.deleteAccount(pass);
+      }catch(e){
+        fail(e.status===401 ? 'パスワードが違います' : 'サーバーに繋がりませんでした');
+        return;
+      }
+      AUTH = { userId:null, token:null };
+      DB.user = null; DB.token = null;
+      DB.events=[]; DB.tasks=[]; DB.timetable=[]; DB.colonies=[]; DB.projects=[];
+      await Promise.all(['user','token', ...SERVER_KEYS].map(save));
+      sess.modal=null; sess.tab='login'; sess.loginMode='login'; render();
+      toast('アカウントを削除しました');
+      return;
+    }
     sess.modal=null; render();
   };
   if(delBtn) delBtn.onclick = async ()=>{
@@ -2210,12 +2450,13 @@ function bindModal(){
 /* ============ INIT ============ */
 (async function init(){
   await loadAll();
+  sess.calView = PREFS.defaultView;
   await probeServer();
   // 前回のトークンがまだ生きていればそのまま入る。切れていればログイン画面へ。
   if(ONLINE && DB.token){
     try{
       const me = await Server.resume(DB.token);
-      DB.user = {id: me.id, name: me.displayName};
+      DB.user = {id: me.id, name: me.displayName, email: me.email};
       await Server.pull();
       await Promise.all(SERVER_KEYS.map(save));
     }catch(e){
