@@ -309,6 +309,19 @@ mark{background:var(--highlight); color:var(--ink); padding:0 2px; border-radius
   display:flex; align-items:center; justify-content:center; border:1px solid var(--line);
 }
 .color-dot.none.on{border-color:var(--ink);}
+.card.picked{outline:2px solid var(--hanko); outline-offset:-1px;}
+.bulk-bar{
+  display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  background:var(--solid); color:var(--white); border-radius:12px;
+  padding:10px 14px; margin-bottom:12px; font-size:13px; font-weight:700;
+}
+.bulk-bar .btn{width:auto; padding:8px 14px; font-size:13px; margin:0;}
+.bulk-bar .btn.ghost{background:rgba(255,255,255,.12); color:var(--white); border-color:rgba(255,255,255,.3);}
+.offline-banner{
+  font-size:12.5px; color:var(--ink-soft);
+  background:var(--paper-2); border:1px solid var(--line); border-radius:10px;
+  padding:8px 12px; margin-bottom:10px;
+}
 .week-summary{
   font-size:12.5px; color:var(--ink-soft);
   background:var(--paper-2); border-radius:10px; padding:8px 12px; margin-bottom:10px;
@@ -694,6 +707,21 @@ function holidayName(dateStr){
   const year = +dateStr.slice(0,4);
   if(!HOLIDAY_CACHE[year]) HOLIDAY_CACHE[year] = buildHolidays(year);
   return HOLIDAY_CACHE[year][dateStr] || null;
+}
+
+/* ============ TASKS CSV EXPORT ============ */
+function csvEscape(s){
+  const str = String(s==null ? '' : s);
+  return /[",\n]/.test(str) ? '"' + str.replace(/"/g,'""') + '"' : str;
+}
+// 先頭にBOMを付けて、ExcelがUTF-8のCSVを文字化けさせずに開けるようにする。
+function buildTasksCSV(){
+  const header = ['タイトル','説明','期限','ステータス','プロジェクト'];
+  const rows = DB.tasks.map(t=>{
+    const proj = t.projectId ? ((DB.projects.find(p=>p.id===t.projectId)||{}).name || '') : '';
+    return [t.title, t.description||'', t.dueAt||'', t.status==='DONE'?'完了':'未完了', proj].map(csvEscape).join(',');
+  });
+  return String.fromCharCode(0xFEFF) + [header.join(','), ...rows].join('\r\n');
 }
 
 /* ============ ICS EXPORT ============ */
@@ -1180,7 +1208,8 @@ function render(){
   else if(sess.tab==='settings') html = renderSettings();
   else if(sess.tab==='search') html = renderSearch();
 
-  main.innerHTML = html;
+  const offlineBanner = ONLINE ? '' : `<div class="offline-banner">この端末に保存済み。オンラインに戻ったら自動で同期されます。</div>`;
+  main.innerHTML = offlineBanner + html;
   bindScreen();
   renderModal();
   fillPrintImages();
@@ -1369,6 +1398,17 @@ function bindLogin(){
 /* ============ CALENDAR ============ */
 const CAL_VIEWS = [{k:'month',label:'月'},{k:'week',label:'週'},{k:'day',label:'日'}];
 
+// 月表示なら月単位、週・日表示ならその単位で前後に動く。矢印ボタンと矢印
+// キーの両方から呼ばれる。
+function navCalendar(step){
+  if(sess.calView==='month'){
+    sess.calMonth.setMonth(sess.calMonth.getMonth()+step);
+  }else{
+    sess.selectedDate = addDays(sess.selectedDate, step*(sess.calView==='week'?7:1));
+    sess.calMonth = parseDate(sess.selectedDate);
+  }
+  render();
+}
 function renderCalendar(){
   const view = sess.calView;
   const body = view==='week' ? renderWeekView()
@@ -1421,6 +1461,14 @@ function renderDueSummary(){
     </div>`;
 }
 function diffDays(a,b){ return Math.round((parseDate(b)-parseDate(a))/86400000); }
+function daysUntilLabel(dateStr){
+  const d = diffDays(todayStr(), dateStr);
+  if(d===0) return '今日';
+  if(d===1) return '明日';
+  if(d>1) return `あと${d}日`;
+  if(d===-1) return '昨日';
+  return `${-d}日前`;
+}
 
 function renderMonthView(){
   const m = sess.calMonth;
@@ -1593,24 +1641,36 @@ function renderTasks(){
     open = open.filter(t=>t.dueAt && t.dueAt<=todayStr());
     done = [];
   }
+  const selectMode = !!sess.taskSelectMode;
+  const selectedIds = sess.selectedTaskIds || [];
   const filterRow = `
     <div class="filter-row" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
       <div style="display:flex; gap:6px;">
         <button class="filter-chip ${!focus?'on':''}" data-taskfocus="off">すべて</button>
         <button class="filter-chip ${focus?'on':''}" data-taskfocus="on">今日やること</button>
       </div>
-      <select id="taskSortSelect" style="width:auto; padding:8px 10px; font-size:13px;">
-        <option value="due" ${sortMode==='due'?'selected':''}>締切順</option>
-        <option value="created" ${sortMode==='created'?'selected':''}>追加順</option>
-        <option value="project" ${sortMode==='project'?'selected':''}>プロジェクト別</option>
-      </select>
+      <div style="display:flex; gap:10px; align-items:center;">
+        <select id="taskSortSelect" style="width:auto; padding:8px 10px; font-size:13px;">
+          <option value="due" ${sortMode==='due'?'selected':''}>締切順</option>
+          <option value="created" ${sortMode==='created'?'selected':''}>追加順</option>
+          <option value="project" ${sortMode==='project'?'selected':''}>プロジェクト別</option>
+        </select>
+        <button class="filter-chip ${selectMode?'on':''}" id="taskSelectModeBtn">${selectMode?'選択をやめる':'選択'}</button>
+      </div>
     </div>`;
+  const bulkBar = (selectMode && selectedIds.length) ? `
+    <div class="bulk-bar">
+      <span>${selectedIds.length} 件選択中</span>
+      <button class="btn ghost" id="bulkDoneBtn" style="margin:0;">完了にする</button>
+      <button class="btn ghost" id="bulkDeleteBtn" style="margin:0; color:var(--danger);">削除する</button>
+    </div>` : '';
   // 今日の分をやり切った時だけ、素っ気ない空欄より一言添える。
   const focusEmpty = (focus && doneToday)
     ? `<div class="empty-state">${ICONS.check}<p>今日のぶんは終わりました</p></div>`
     : emptyState(focus? '今日やることはありません' : '未完了のタスクはありません');
   return `
     ${filterRow}
+    ${bulkBar}
     <div class="section-label">未完了（${open.length}）</div>
     ${open.length? open.map(taskCard).join('') : focusEmpty}
     ${done.length? `<div class="section-label">完了済み（${done.length}）</div>` + done.map(taskCard).join('') : ''}
@@ -1622,18 +1682,21 @@ function taskCard(t, hq){
   const proj = t.projectId? DB.projects.find(p=>p.id===t.projectId) : null;
   const overdue = !isDone && t.dueAt && t.dueAt < todayStr();
   const color = LOCAL_COLORS[t.id];
-  return `<div class="card ${isDone?'done':''} ${overdue?'overdue':''} ${t.ai?'ai':''}" data-task="${t.id}"${color?` style="--card-accent:${color}"`:''}>
+  const selectMode = !!sess.taskSelectMode;
+  const picked = (sess.selectedTaskIds||[]).includes(t.id);
+  const attr = selectMode ? ` data-picktask="${t.id}"` : ` data-task="${t.id}"`;
+  return `<div class="card ${isDone?'done':''} ${overdue?'overdue':''} ${t.ai?'ai':''} ${picked?'picked':''}"${attr}${color?` style="--card-accent:${color}"`:''}>
     <div class="title-row">
       <div style="display:flex; gap:10px; align-items:flex-start; flex:1;">
-        <div class="check ${isDone?'on':''}" data-toggle="${t.id}">${isDone? '済':''}</div>
+        <div class="check ${selectMode? (picked?'on':'') : (isDone?'on':'')}" ${selectMode?`data-picktask="${t.id}"`:`data-toggle="${t.id}"`}>${selectMode ? (picked?'✓':'') : (isDone?'済':'')}</div>
         <div style="flex:1;">
           <div class="label-row">${t.ai?'<span class="chip ai">AI取込</span>':''}${proj?`<span class="chip proj">${esc(proj.name)}</span>`:''}${overdue?'<span class="chip late">期限切れ</span>':''}</div>
           <div class="item-title ${isDone?'strike':''}">${escHighlight(t.title,hq)}</div>
           ${t.description? `<div class="item-sub">${escHighlight(t.description,hq)}</div>`:''}
-          ${t.dueAt? `<div class="item-sub ${overdue?'late-text':''}">期限：${fmtDate(t.dueAt)}</div>`:''}
+          ${t.dueAt? `<div class="item-sub ${overdue?'late-text':''}">期限：${fmtDate(t.dueAt)}（${daysUntilLabel(t.dueAt)}）</div>`:''}
         </div>
       </div>
-      <button class="link-btn" data-deltask="${t.id}">${ICONS.trash}</button>
+      ${selectMode? '' : `<button class="link-btn" data-deltask="${t.id}">${ICONS.trash}</button>`}
     </div>
   </div>`;
 }
@@ -2012,6 +2075,7 @@ function renderSettings(){
     </div>
     <button class="btn ghost" id="exportBtn" style="margin-top:10px;">データをエクスポート</button>
     <button class="btn ghost" id="exportIcsBtn" style="margin-top:10px;">カレンダーをエクスポート（.ics）</button>
+    <button class="btn ghost" id="exportCsvBtn" style="margin-top:10px;">タスクをエクスポート（.csv）</button>
 
     <div class="section-label">サーバー</div>
     <div class="card">
@@ -2250,16 +2314,7 @@ function bindScreen(){
   });
   // 月表示は月送り、週表示は週送り、日表示は日送り。
   document.querySelectorAll('[data-nav]').forEach(el=>{
-    el.onclick = ()=>{
-      const step = parseInt(el.dataset.nav);
-      if(sess.calView==='month'){
-        sess.calMonth.setMonth(sess.calMonth.getMonth()+step);
-      }else{
-        sess.selectedDate = addDays(sess.selectedDate, step*(sess.calView==='week'?7:1));
-        sess.calMonth = parseDate(sess.selectedDate);
-      }
-      render();
-    };
+    el.onclick = ()=>{ navCalendar(parseInt(el.dataset.nav)); };
   });
   document.querySelectorAll('[data-view]').forEach(el=>{
     el.onclick = ()=>{ sess.calView = el.dataset.view; render(); };
@@ -2318,6 +2373,48 @@ function bindScreen(){
       renderModal();
     };
   });
+
+  // 一括選択モード。カード内の丸とカード本体、両方が data-picktask を持つので、
+  // 内側の丸をタップした時は stopPropagation して二重トグルを防ぐ。
+  document.querySelectorAll('[data-picktask]').forEach(el=>{
+    el.onclick = (ev)=>{
+      ev.stopPropagation();
+      const id = el.dataset.picktask;
+      const set = new Set(sess.selectedTaskIds || []);
+      if(set.has(id)) set.delete(id); else set.add(id);
+      sess.selectedTaskIds = [...set];
+      render();
+    };
+  });
+  const taskSelectModeBtn = document.getElementById('taskSelectModeBtn');
+  if(taskSelectModeBtn) taskSelectModeBtn.onclick = ()=>{
+    sess.taskSelectMode = !sess.taskSelectMode;
+    sess.selectedTaskIds = [];
+    render();
+  };
+  const bulkDoneBtn = document.getElementById('bulkDoneBtn');
+  if(bulkDoneBtn) bulkDoneBtn.onclick = async ()=>{
+    const ids = sess.selectedTaskIds || [];
+    for(const id of ids){
+      const t = DB.tasks.find(x=>x.id===id);
+      if(!t || t.status==='DONE') continue;
+      t.status = 'DONE';
+      const row = await withServer(()=>Server.updateTask(t));
+      if(row) t.version = row.version;
+    }
+    await save('tasks');
+    sess.taskSelectMode = false; sess.selectedTaskIds = [];
+    render(); toast(`${ids.length}件を完了にしました`);
+  };
+  const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
+  if(bulkDeleteBtn) bulkDeleteBtn.onclick = async ()=>{
+    const ids = sess.selectedTaskIds || [];
+    DB.tasks = DB.tasks.filter(t=>!ids.includes(t.id));
+    for(const id of ids){ await withServer(()=>Server.deleteTask(id)); }
+    await save('tasks');
+    sess.taskSelectMode = false; sess.selectedTaskIds = [];
+    render(); toast(`${ids.length}件を削除しました`);
+  };
 
   // search
   const searchInput = document.getElementById('searchInput');
@@ -2548,6 +2645,17 @@ function bindScreen(){
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
     toast('ICSファイルを書き出しました');
+  };
+
+  const exportCsvBtn = document.getElementById('exportCsvBtn');
+  if(exportCsvBtn) exportCsvBtn.onclick = ()=>{
+    const blob = new Blob([buildTasksCSV()], {type:'text/csv;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `tariki-tasks-${todayStr()}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    toast('CSVファイルを書き出しました');
   };
 }
 
@@ -2864,6 +2972,8 @@ window.addEventListener('keydown', (ev)=>{
   }else if(ev.key==='n'){
     const fab = document.querySelector('.fab');
     if(fab) fab.click();
+  }else if((ev.key==='ArrowLeft' || ev.key==='ArrowRight') && sess.tab==='cal' && !sess.modal){
+    navCalendar(ev.key==='ArrowLeft' ? -1 : 1);
   }
 });
 </script>
