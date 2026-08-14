@@ -18,6 +18,29 @@ const INDEX      = path.join(__dirname, 'index.html');
 
 const api = new URL(API_ORIGIN);
 
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.js':   'text/javascript; charset=utf-8',
+  '.png':  'image/png',
+  '.svg':  'image/svg+xml',
+  '.ico':  'image/x-icon',
+};
+
+// manifest.json・アイコン・sw.js のような実ファイルはそのまま返す。それ以外は
+// index.html（SPA）にフォールバックする。本番の nginx の try_files と同じ形。
+function serveStatic(req, res){
+  const urlPath = decodeURIComponent(req.url.split('?')[0]);
+  const filePath = path.join(__dirname, urlPath);
+  if(urlPath !== '/' && filePath.startsWith(__dirname) && fs.existsSync(filePath) && fs.statSync(filePath).isFile()){
+    const ext = path.extname(filePath);
+    res.writeHead(200, {'Content-Type': MIME[ext] || 'application/octet-stream'});
+    res.end(fs.readFileSync(filePath));
+    return true;
+  }
+  return false;
+}
+
 http.createServer((req, res) => {
   if (req.url.startsWith('/v1') || req.url.startsWith('/healthz') || req.url.startsWith('/readyz')) {
     const upstream = http.request({
@@ -37,6 +60,8 @@ http.createServer((req, res) => {
     req.pipe(upstream);
     return;
   }
+
+  if(serveStatic(req, res)) return;
 
   res.writeHead(200, {'Content-Type': 'text/html; charset=utf-8'});
   res.end(fs.readFileSync(INDEX));
