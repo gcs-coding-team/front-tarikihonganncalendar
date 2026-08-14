@@ -116,6 +116,13 @@ body{
   color:var(--ink-soft);
   letter-spacing:.02em;
 }
+.net-dot{
+  display:inline-block; width:8px; height:8px; border-radius:50%;
+  vertical-align:middle; margin-left:2px;
+  transition:background .15s;
+}
+.net-dot.on{background:var(--sage);}
+.net-dot.off{background:var(--ink-soft);}
 .screen-title{
   margin-top:10px;
   font-family:'Inter','Zen Kaku Gothic New',sans-serif;
@@ -321,6 +328,11 @@ label.f{font-size:11.5px; color:var(--ink-soft); display:block; margin-bottom:5p
 }
 .dropzone:hover{border-color:var(--pen-blue); background:var(--dropzone-hover);}
 .dropzone svg{stroke:var(--ink-soft); width:30px; height:30px; margin-bottom:8px;}
+.privacy-note{
+  display:flex; align-items:center; gap:6px;
+  font-size:12px; color:var(--sage);
+  margin:-6px 0 14px; padding:0 2px;
+}
 .preview-img{width:100%; border-radius:14px; border:1px solid var(--line); margin-bottom:14px; max-height:220px; object-fit:cover;}
 
 /* progress steps */
@@ -539,7 +551,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 
 <div class="frame" id="frame">
   <div class="topbar">
-    <div class="brand">他力本願カレンダー <small id="userTag"></small></div>
+    <div class="brand">他力本願カレンダー <small id="userTag"></small><span class="net-dot" id="netDot"></span></div>
     <div class="screen-title">
       <span id="screenTitle">カレンダー</span>
       <span class="title-right">
@@ -978,6 +990,9 @@ function render(){
   tabbar.style.display='flex';
   main.style.padding='';
   userTag.textContent = 'ようこそ、'+DB.user.name+'さん';
+  const netDot = document.getElementById('netDot');
+  netDot.className = 'net-dot ' + (ONLINE ? 'on' : 'off');
+  netDot.title = ONLINE ? 'サーバーに接続中' : 'サーバー未接続（端末内だけで動作中）';
   titleEl.textContent = TITLES[sess.tab];
   idxEl.textContent = IDXMAP[sess.tab];
 
@@ -1370,11 +1385,22 @@ function renderTimetable(){
 
 /* ============ TASKS ============ */
 function renderTasks(){
-  const open = DB.tasks.filter(t=>t.status==='OPEN').sort((a,b)=>(a.dueAt||'').localeCompare(b.dueAt||''));
-  const done = DB.tasks.filter(t=>t.status==='DONE');
+  const focus = !!sess.taskFocus;
+  let open = DB.tasks.filter(t=>t.status==='OPEN').sort((a,b)=>(a.dueAt||'').localeCompare(b.dueAt||''));
+  let done = DB.tasks.filter(t=>t.status==='DONE');
+  if(focus){
+    open = open.filter(t=>t.dueAt && t.dueAt<=todayStr());
+    done = [];
+  }
+  const filterRow = `
+    <div class="filter-row">
+      <button class="filter-chip ${!focus?'on':''}" data-taskfocus="off">すべて</button>
+      <button class="filter-chip ${focus?'on':''}" data-taskfocus="on">今日やること</button>
+    </div>`;
   return `
+    ${filterRow}
     <div class="section-label">未完了（${open.length}）</div>
-    ${open.length? open.map(taskCard).join('') : emptyState('未完了のタスクはありません')}
+    ${open.length? open.map(taskCard).join('') : emptyState(focus? '今日やることはありません' : '未完了のタスクはありません')}
     ${done.length? `<div class="section-label">完了済み（${done.length}）</div>` + done.map(taskCard).join('') : ''}
     <button class="fab" id="addTaskFab">${ICONS.plus}</button>
   `;
@@ -1485,6 +1511,7 @@ function renderPrint(){
         <div>プリントを撮影 / 画像を選択</div>
         <div style="font-size:11px; margin-top:4px;">JPEG・PNG　最大10MB</div>
       </div>
+      <div class="privacy-note">この画像は外部のAIサービスには送信されません。サーバー上のローカルモデル（Ollama）だけで解析します。</div>
       <input type="file" id="fileInput" accept="image/*" style="display:none;">
       <div class="section-label">読み取ったプリント</div>
       ${(sess.prints||[]).length
@@ -2033,6 +2060,9 @@ function bindScreen(){
   // tasks
   const addTaskFab = document.getElementById('addTaskFab');
   if(addTaskFab) addTaskFab.onclick = ()=>{ sess.modal={kind:'task', data:null}; renderModal(); };
+  document.querySelectorAll('[data-taskfocus]').forEach(el=>{
+    el.onclick = ()=>{ sess.taskFocus = el.dataset.taskfocus==='on'; render(); };
+  });
   document.querySelectorAll('[data-toggle]').forEach(el=>{
     el.onclick = async (ev)=>{
       ev.stopPropagation();          // カードを開かずにチェックだけ切り替える
