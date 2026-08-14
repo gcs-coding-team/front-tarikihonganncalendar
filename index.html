@@ -296,6 +296,7 @@ label.f{font-size:11.5px; color:var(--ink-soft); display:block; margin-bottom:5p
 .cal-day.sel{background:var(--hanko-soft); border-color:var(--hanko); color:var(--ink); font-weight:700;}
 .cal-day.sel.today{background:var(--hanko); border-color:var(--hanko); color:var(--white);}
 .cal-day.holiday .num{color:var(--hanko);}
+.cal-day.proj-hit{box-shadow:inset 0 0 0 2px var(--sage);}
 .cal-day.holiday.today .num, .cal-day.holiday.sel .num{color:inherit;}
 mark{background:var(--highlight); color:var(--ink); padding:0 2px; border-radius:3px;}
 .color-dots{display:flex; gap:8px; margin-top:4px;}
@@ -1414,10 +1415,17 @@ function renderCalendar(){
   const body = view==='week' ? renderWeekView()
              : view==='day'  ? renderDayView()
              : renderMonthView();
+  const proj = sess.calProjectFilter ? DB.projects.find(p=>p.id===sess.calProjectFilter) : null;
+  const projBanner = proj ? `
+    <div class="week-summary" style="display:flex; justify-content:space-between; align-items:center;">
+      <span>「${esc(proj.name)}」の締切だけ強調表示中</span>
+      <button class="link-btn" id="clearCalProjectFilter">解除</button>
+    </div>` : '';
   return `
     <div class="viewswitch">
       ${CAL_VIEWS.map(v=>`<button class="viewswitch-btn ${view===v.k?'on':''}" data-view="${v.k}">${v.label}</button>`).join('')}
     </div>
+    ${projBanner}
     ${renderWeekSummary()}
     ${renderDueSummary()}
     ${body}
@@ -1480,13 +1488,17 @@ function renderMonthView(){
   for(let i=0;i<startPad;i++) cells.push(null);
   for(let d=1; d<=daysInMonth; d++) cells.push(d);
 
+  const projTaskDates = sess.calProjectFilter
+    ? new Set(DB.tasks.filter(t=>t.projectId===sess.calProjectFilter && t.dueAt).map(t=>t.dueAt))
+    : null;
   let grid = `<div class="cal-grid">` + orderedDow().map(d=>`<div class="cal-dow">${d}</div>`).join('');
   cells.forEach(d=>{
     if(d===null){ grid+=`<div class="cal-day pad"></div>`; return; }
     const dateStr = `${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const has = eventsForDate(dateStr).length>0;
     const holiday = holidayName(dateStr);
-    grid += `<div class="cal-day ${dateStr===todayStr()?'today':''} ${dateStr===sess.selectedDate?'sel':''} ${holiday?'holiday':''}" data-date="${dateStr}"${holiday?` title="${esc(holiday)}"`:''}><span class="num">${d}</span>${has?'<div class="dot"></div>':''}</div>`;
+    const projHit = projTaskDates && projTaskDates.has(dateStr);
+    grid += `<div class="cal-day ${dateStr===todayStr()?'today':''} ${dateStr===sess.selectedDate?'sel':''} ${holiday?'holiday':''} ${projHit?'proj-hit':''}" data-date="${dateStr}"${holiday?` title="${esc(holiday)}"`:''}><span class="num">${d}</span>${has?'<div class="dot"></div>':''}</div>`;
   });
   grid += `</div>`;
 
@@ -1756,6 +1768,7 @@ function renderProjects(){
       <div class="section-label" style="margin-top:18px;">タスク</div>
       ${tasks.length? tasks.map(taskCard).join('') : emptyState('このプロジェクトのタスクはまだありません')}
       <button class="btn ghost" id="addTaskToProject">このプロジェクトにタスクを追加</button>
+      ${tasks.some(t=>t.dueAt)? `<button class="btn ghost" style="margin-top:8px;" data-calproject="${p.id}">カレンダーで締切を見る</button>`:''}
       <button class="btn ghost" style="margin-top:8px; color:var(--danger); border-color:var(--danger);" id="delProject">プロジェクトを削除</button>
     `;
   }
@@ -2461,6 +2474,15 @@ function bindScreen(){
   };
   const addTaskToProject = document.getElementById('addTaskToProject');
   if(addTaskToProject) addTaskToProject.onclick = ()=>{ sess.modal={kind:'task', data:null, projectId:sess.projectDetail}; renderModal(); };
+  document.querySelectorAll('[data-calproject]').forEach(el=>{
+    el.onclick = ()=>{
+      sess.calProjectFilter = el.dataset.calproject;
+      sess.tab = 'cal'; sess.calView = 'month';
+      render();
+    };
+  });
+  const clearCalProjectFilter = document.getElementById('clearCalProjectFilter');
+  if(clearCalProjectFilter) clearCalProjectFilter.onclick = ()=>{ sess.calProjectFilter=null; render(); };
   const delProject = document.getElementById('delProject');
   if(delProject) delProject.onclick = async ()=>{
     const pid = sess.projectDetail;
