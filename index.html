@@ -601,6 +601,74 @@ function parseDate(s){ return new Date(s+'T00:00:00'); }
 function addDays(s,n){ const d=parseDate(s); d.setDate(d.getDate()+n); return ymd(d); }
 const DOW_JP = ['日','月','火','水','木','金','土'];
 function fmtDate(s){ const d=parseDate(s); return `${d.getMonth()+1}/${d.getDate()}(${DOW_JP[d.getDay()]})`; }
+function nextDateForDow(dow){
+  let d = todayStr();
+  for(let i=0;i<7;i++){
+    if(parseDate(d).getDay()===dow) return d;
+    d = addDays(d,1);
+  }
+  return d;
+}
+
+/* ============ ICS EXPORT ============ */
+// カレンダーアプリ間でよく使われる形式（RFC 5545）で書き出す。タイムゾーンは
+// 付けず「時計時刻」のまま出す — 端末のタイムゾーンで解釈される、この用途では
+// それで十分な簡易な形。
+function icsEscape(s){
+  return String(s||'').replace(/\\/g,'\\\\').replace(/;/g,'\\;').replace(/,/g,'\\,').replace(/\n/g,'\\n');
+}
+function icsDate(dateStr){ return dateStr.replace(/-/g,''); }
+function icsDateTime(dateStr, timeStr){ return icsDate(dateStr) + 'T' + timeStr.replace(':','') + '00'; }
+
+function buildICS(){
+  const stamp = new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+Z$/,'Z');
+  const lines = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//tariki-calendar//ja','CALSCALE:GREGORIAN'];
+
+  DB.events.forEach(ev=>{
+    const date = ev.startAt.slice(0,10);
+    const time = ev.startAt.slice(11,16);
+    lines.push('BEGIN:VEVENT');
+    lines.push('UID:'+ev.id+'@tariki-calendar');
+    lines.push('DTSTAMP:'+stamp);
+    lines.push('SUMMARY:'+icsEscape(ev.title));
+    if(ev.description) lines.push('DESCRIPTION:'+icsEscape(ev.description));
+    if(ev.allDay){
+      lines.push('DTSTART;VALUE=DATE:'+icsDate(date));
+      lines.push('DTEND;VALUE=DATE:'+icsDate(addDays(date,1)));
+    }else{
+      lines.push('DTSTART:'+icsDateTime(date,time));
+    }
+    if(ev.repeat){
+      const freq = {daily:'DAILY',weekly:'WEEKLY',monthly:'MONTHLY'}[ev.repeat.freq];
+      if(freq){
+        let rrule = 'RRULE:FREQ='+freq;
+        if(ev.repeat.until) rrule += ';UNTIL='+icsDate(ev.repeat.until)+(ev.allDay?'':'T235959');
+        lines.push(rrule);
+      }
+      (ev.exdates||[]).forEach(ex=>{
+        lines.push(ev.allDay ? 'EXDATE;VALUE=DATE:'+icsDate(ex) : 'EXDATE:'+icsDateTime(ex,time));
+      });
+    }
+    lines.push('END:VEVENT');
+  });
+
+  DB.timetable.forEach(e=>{
+    const start = nextDateForDow(e.dayOfWeek);
+    const time = PERIOD_START[e.period] || '08:50';
+    const desc = [e.room, e.teacher].filter(Boolean).join('・');
+    lines.push('BEGIN:VEVENT');
+    lines.push('UID:tt_'+e.id+'@tariki-calendar');
+    lines.push('DTSTAMP:'+stamp);
+    lines.push('SUMMARY:'+icsEscape(e.subject));
+    if(desc) lines.push('DESCRIPTION:'+icsEscape(desc));
+    lines.push('DTSTART:'+icsDateTime(start,time));
+    lines.push('RRULE:FREQ=WEEKLY');
+    lines.push('END:VEVENT');
+  });
+
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
+}
 
 // 表示・使い勝手の設定。サーバーには置かない — この端末だけの好みなので。
 let PREFS = { weekStart:'sun', defaultView:'month' };
@@ -1388,6 +1456,7 @@ function renderTasks(){
   const focus = !!sess.taskFocus;
   let open = DB.tasks.filter(t=>t.status==='OPEN').sort((a,b)=>(a.dueAt||'').localeCompare(b.dueAt||''));
   let done = DB.tasks.filter(t=>t.status==='DONE');
+  const doneToday = DB.tasks.some(t=>t.status==='DONE' && t.dueAt<=todayStr());
   if(focus){
     open = open.filter(t=>t.dueAt && t.dueAt<=todayStr());
     done = [];
@@ -1397,10 +1466,14 @@ function renderTasks(){
       <button class="filter-chip ${!focus?'on':''}" data-taskfocus="off">すべて</button>
       <button class="filter-chip ${focus?'on':''}" data-taskfocus="on">今日やること</button>
     </div>`;
+  // 今日の分をやり切った時だけ、素っ気ない空欄より一言添える。
+  const focusEmpty = (focus && doneToday)
+    ? `<div class="empty-state">${ICONS.check}<p>今日のぶんは終わりました</p></div>`
+    : emptyState(focus? '今日やることはありません' : '未完了のタスクはありません');
   return `
     ${filterRow}
     <div class="section-label">未完了（${open.length}）</div>
-    ${open.length? open.map(taskCard).join('') : emptyState(focus? '今日やることはありません' : '未完了のタスクはありません')}
+    ${open.length? open.map(taskCard).join('') : focusEmpty}
     ${done.length? `<div class="section-label">完了済み（${done.length}）</div>` + done.map(taskCard).join('') : ''}
     <button class="fab" id="addTaskFab">${ICONS.plus}</button>
   `;
@@ -1792,6 +1865,7 @@ function renderSettings(){
       </div>
     </div>
     <button class="btn ghost" id="exportBtn" style="margin-top:10px;">データをエクスポート</button>
+    <button class="btn ghost" id="exportIcsBtn" style="margin-top:10px;">カレンダーをエクスポート（.ics）</button>
 
     <div class="section-label">サーバー</div>
     <div class="card">
@@ -2303,6 +2377,17 @@ function bindScreen(){
     setTimeout(()=>URL.revokeObjectURL(url), 1000);
     toast('書き出しました');
   };
+
+  const exportIcsBtn = document.getElementById('exportIcsBtn');
+  if(exportIcsBtn) exportIcsBtn.onclick = ()=>{
+    const blob = new Blob([buildICS()], {type:'text/calendar;charset=utf-8'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `tariki-${todayStr()}.ics`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url), 1000);
+    toast('ICSファイルを書き出しました');
+  };
 }
 
 function bindModal(){
@@ -2588,6 +2673,29 @@ if('serviceWorker' in navigator){
     navigator.serviceWorker.register('/sw.js').catch(()=>{});
   });
 }
+
+/* ============ KEYBOARD SHORTCUTS ============ */
+// フォームに入力中や、既にモーダルが開いている時は何もしない。ショートカット
+// より、そこに打った文字の方が優先されるべきなので。
+window.addEventListener('keydown', (ev)=>{
+  if(ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  const tag = (ev.target.tagName || '').toLowerCase();
+  const typing = tag==='input' || tag==='textarea' || tag==='select' || ev.target.isContentEditable;
+
+  if(ev.key==='Escape' && sess.modal){
+    sess.modal = null; render(); return;
+  }
+  if(typing || !DB.user) return;
+
+  if(ev.key==='/'){
+    ev.preventDefault();
+    const btn = document.getElementById('searchBtn');
+    if(btn) btn.click();
+  }else if(ev.key==='n'){
+    const fab = document.querySelector('.fab');
+    if(fab) fab.click();
+  }
+});
 </script>
 </body>
 </html>
