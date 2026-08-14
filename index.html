@@ -1571,7 +1571,11 @@ function renderPrint(){
           <div class="top">
             <div class="check ${c.include?'on':''}" data-cand-toggle="${i}">${c.include?'済':''}</div>
             <div style="flex:1;">
-              <div class="label-row"><span class="chip ${c.type==='task'?'blue':'ai'}">${c.type==='task'?'タスク':'予定'}</span></div>
+              <div class="label-row">
+                <span class="chip ${c.type==='task'?'blue':'ai'}">${c.type==='task'?'タスク':'予定'}</span>
+                ${c.confidence==='high'? '<span class="chip proj">読み取り良好</span>' : ''}
+                ${c.confidence==='medium'? '<span class="chip ai">要確認</span>' : ''}
+              </div>
               <input type="text" data-cand-title="${i}" value="${esc(c.title)}">
               <div class="row2">
                 <input type="date" data-cand-date="${i}" value="${c.date}">
@@ -1677,6 +1681,7 @@ function renderColony(){
       <div class="item-sub" style="margin-bottom:16px;">${esc(c.description||'')}</div>
       <div class="section-label">招待コード</div>
       <div class="card" style="text-align:center; font-weight:800; font-size:18px; letter-spacing:.2em;">${esc(c.inviteCode)}</div>
+      <button class="btn ghost" id="copyInviteBtn" data-code="${esc(c.inviteCode)}" style="margin-top:8px;">コードをコピー</button>
       <div class="section-label">参加者（${memberCount(c)}）</div>
       ${(c.members||[]).map(m=>`
         <div class="card">
@@ -2209,6 +2214,20 @@ function bindScreen(){
   });
   const backColony = document.getElementById('backColony');
   if(backColony) backColony.onclick = ()=>{ sess.colonyDetail=null; render(); };
+  const copyInviteBtn = document.getElementById('copyInviteBtn');
+  if(copyInviteBtn) copyInviteBtn.onclick = async ()=>{
+    const code = copyInviteBtn.dataset.code;
+    try{
+      await navigator.clipboard.writeText(code);
+    }catch(e){
+      const ta = document.createElement('textarea');
+      ta.value = code; ta.style.position='fixed'; ta.style.opacity='0';
+      document.body.appendChild(ta); ta.select();
+      try{ document.execCommand('copy'); }catch(e2){}
+      document.body.removeChild(ta);
+    }
+    toast('招待コードをコピーしました');
+  };
   const joinColonyBtn = document.getElementById('joinColonyBtn');
   if(joinColonyBtn) joinColonyBtn.onclick = ()=>{ sess.modal={kind:'joinColony'}; renderModal(); };
   const shareTaskToColony = document.getElementById('shareTaskToColony');
