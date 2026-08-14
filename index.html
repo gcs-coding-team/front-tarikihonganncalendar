@@ -193,7 +193,7 @@ body{
 .card::after{
   content:"";
   position:absolute; left:0; top:14px; bottom:14px; width:3px; border-radius:3px;
-  background:var(--pen-blue);
+  background:var(--card-accent, var(--pen-blue));
   opacity:.7;
 }
 .card.done::after{background:var(--sage);}
@@ -295,11 +295,35 @@ label.f{font-size:11.5px; color:var(--ink-soft); display:block; margin-bottom:5p
 .cal-day.today .dot{background:var(--white);}
 .cal-day.sel{background:var(--hanko-soft); border-color:var(--hanko); color:var(--ink); font-weight:700;}
 .cal-day.sel.today{background:var(--hanko); border-color:var(--hanko); color:var(--white);}
+.cal-day.holiday .num{color:var(--hanko);}
+.cal-day.holiday.today .num, .cal-day.holiday.sel .num{color:inherit;}
+mark{background:var(--highlight); color:var(--ink); padding:0 2px; border-radius:3px;}
+.color-dots{display:flex; gap:8px; margin-top:4px;}
+.color-dot{
+  width:26px; height:26px; border-radius:50%; border:2px solid transparent;
+  cursor:pointer; padding:0;
+}
+.color-dot.on{border-color:var(--ink);}
+.color-dot.none{
+  background:var(--paper-2); color:var(--ink-soft); font-size:13px;
+  display:flex; align-items:center; justify-content:center; border:1px solid var(--line);
+}
+.color-dot.none.on{border-color:var(--ink);}
+.week-summary{
+  font-size:12.5px; color:var(--ink-soft);
+  background:var(--paper-2); border-radius:10px; padding:8px 12px; margin-bottom:10px;
+}
+.holiday-banner{
+  font-size:12.5px; font-weight:700; color:var(--hanko);
+  background:var(--hanko-soft); border-radius:10px; padding:8px 12px; margin-bottom:8px;
+}
 
 /* timetable */
 .tt-wrap{overflow-x:auto;}
 .tt-grid{display:grid; grid-template-columns:34px repeat(6,1fr); gap:4px; min-width:520px;}
 .tt-h{text-align:center; font-size:11px; font-weight:700; color:var(--ink-soft); padding:6px 0;}
+.tt-h.today-col{color:var(--hanko);}
+.tt-cell.today-col{background:var(--hanko-soft);}
 .tt-period{font-size:10px; color:var(--ink-soft); display:flex; align-items:center; justify-content:center;}
 .tt-cell{
   background:var(--surface); border:1px solid var(--line); border-radius:10px; min-height:54px;
@@ -590,6 +614,26 @@ let sess = { tab:'cal', selectedDate: todayStr(), calMonth:new Date(), calView:'
 
 function uid(){ return 'id_'+Math.random().toString(36).slice(2,10); }
 
+/* ============ LOCAL COLOR TAGS ============ */
+// タスクの色分け。サーバーは color を知らない（構造体に無い）ので、送っても
+// 黙って捨てられて同期のたびに消える。だからこれは端末のlocalStorageだけに
+// 置く — 他の端末には引き継がれない、という制約を了承した上での簡易機能。
+const COLOR_PALETTE = ['#E0402B','#2F6FED','#17966A','#F5B93B','#8B5CF6','#EC4899'];
+let LOCAL_COLORS = {};
+function loadLocalColors(){
+  try{ LOCAL_COLORS = JSON.parse(localStorage.getItem('tariki_colors')||'{}'); }catch(e){ LOCAL_COLORS = {}; }
+}
+function saveLocalColors(){
+  try{ localStorage.setItem('tariki_colors', JSON.stringify(LOCAL_COLORS)); }catch(e){}
+}
+function colorDots(id){
+  const current = LOCAL_COLORS[id] || '';
+  const swatches = COLOR_PALETTE.map(c=>
+    `<button type="button" class="color-dot ${current===c?'on':''}" data-colorpick="${id}" data-color="${c}" style="background:${c}"></button>`
+  ).join('');
+  return `<div class="color-dots">${swatches}<button type="button" class="color-dot none ${!current?'on':''}" data-colorpick="${id}" data-color="" title="色なし">×</button></div>`;
+}
+
 /* ============ DATES ============ */
 // toISOString() は UTC 基準なので、日本時間だと朝 9 時前に前日の日付が返る。
 // 「今日」がずれると期限の判定まで巻き添えになるので、端末のローカル日付で扱う。
@@ -608,6 +652,48 @@ function nextDateForDow(dow){
     d = addDays(d,1);
   }
   return d;
+}
+
+/* ============ HOLIDAYS ============ */
+// 日本の祝日。固定日と「第n月曜日」は計算で出し、春分・秋分の日だけは
+// 天文計算が要るので国立天文台発表の日付を直接持つ（2025〜2027年分。
+// 範囲外の年は空白のまま — 間違った日付を出すより、出さない方がいい）。
+function nthMondayOfMonth(year, month, n){ // month: 1-12
+  const d = new Date(year, month-1, 1);
+  const firstMonday = 1 + ((8 - d.getDay()) % 7);
+  return ymd(new Date(year, month-1, firstMonday + (n-1)*7));
+}
+const EQUINOX = {
+  2025: {spring:'2025-03-20', autumn:'2025-09-23'},
+  2026: {spring:'2026-03-20', autumn:'2026-09-23'},
+  2027: {spring:'2027-03-21', autumn:'2027-09-23'},
+};
+function buildHolidays(year){
+  const h = {};
+  h[year+'-01-01'] = '元日';
+  h[nthMondayOfMonth(year,1,2)] = '成人の日';
+  h[year+'-02-11'] = '建国記念の日';
+  h[year+'-02-23'] = '天皇誕生日';
+  if(EQUINOX[year]) h[EQUINOX[year].spring] = '春分の日';
+  h[year+'-04-29'] = '昭和の日';
+  h[year+'-05-03'] = '憲法記念日';
+  h[year+'-05-04'] = 'みどりの日';
+  h[year+'-05-05'] = 'こどもの日';
+  h[nthMondayOfMonth(year,7,3)] = '海の日';
+  h[year+'-08-11'] = '山の日';
+  h[nthMondayOfMonth(year,9,3)] = '敬老の日';
+  if(EQUINOX[year]) h[EQUINOX[year].autumn] = '秋分の日';
+  h[nthMondayOfMonth(year,10,2)] = 'スポーツの日';
+  h[year+'-11-03'] = '文化の日';
+  h[year+'-11-23'] = '勤労感謝の日';
+  return h;
+}
+const HOLIDAY_CACHE = {};
+// 振替休日（日曜と重なった時に月曜へ振り替える制度）は対象外の簡易版。
+function holidayName(dateStr){
+  const year = +dateStr.slice(0,4);
+  if(!HOLIDAY_CACHE[year]) HOLIDAY_CACHE[year] = buildHolidays(year);
+  return HOLIDAY_CACHE[year][dateStr] || null;
 }
 
 /* ============ ICS EXPORT ============ */
@@ -1292,10 +1378,21 @@ function renderCalendar(){
     <div class="viewswitch">
       ${CAL_VIEWS.map(v=>`<button class="viewswitch-btn ${view===v.k?'on':''}" data-view="${v.k}">${v.label}</button>`).join('')}
     </div>
+    ${renderWeekSummary()}
     ${renderDueSummary()}
     ${body}
     <button class="fab" id="addEventFab">${ICONS.plus}</button>
   `;
+}
+
+// 今週（週の始まりの設定に合わせる）の予定・タスク件数をざっくり見せる。
+function renderWeekSummary(){
+  const start = addDays(todayStr(), -((parseDate(todayStr()).getDay() - weekStartOffset() + 7) % 7));
+  const end = addDays(start, 6);
+  let evCount = 0;
+  for(let d=start; d<=end; d=addDays(d,1)) evCount += eventsForDate(d).length;
+  const taskCount = DB.tasks.filter(t=>t.status==='OPEN' && t.dueAt && t.dueAt>=start && t.dueAt<=end).length;
+  return `<div class="week-summary">今週：予定 ${evCount} 件・タスク ${taskCount} 件</div>`;
 }
 
 // 期限が今日・明日のタスクと、過ぎてしまったタスクを画面の先頭に出す。
@@ -1340,15 +1437,18 @@ function renderMonthView(){
     if(d===null){ grid+=`<div class="cal-day pad"></div>`; return; }
     const dateStr = `${y}-${String(mo+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
     const has = eventsForDate(dateStr).length>0;
-    grid += `<div class="cal-day ${dateStr===todayStr()?'today':''} ${dateStr===sess.selectedDate?'sel':''}" data-date="${dateStr}">${d}${has?'<div class="dot"></div>':''}</div>`;
+    const holiday = holidayName(dateStr);
+    grid += `<div class="cal-day ${dateStr===todayStr()?'today':''} ${dateStr===sess.selectedDate?'sel':''} ${holiday?'holiday':''}" data-date="${dateStr}"${holiday?` title="${esc(holiday)}"`:''}><span class="num">${d}</span>${has?'<div class="dot"></div>':''}</div>`;
   });
   grid += `</div>`;
 
   const dayEvents = eventsForDate(sess.selectedDate);
+  const selHoliday = holidayName(sess.selectedDate);
   return `
     ${navRow(`${y}年 ${mo+1}月`)}
     ${grid}
     <div class="section-label">${fmtDate(sess.selectedDate)} の予定</div>
+    ${selHoliday? `<div class="holiday-banner">${esc(selHoliday)}</div>` : ''}
     ${dayEvents.length? dayEvents.map(evCard).join('') : emptyState('この日は予定がありません')}
   `;
 }
@@ -1402,7 +1502,7 @@ function navRow(label){
     <button class="link-btn" data-nav="1" style="transform:scaleX(-1);">${ICONS.arrow}</button>
   </div>`;
 }
-function evCard(e){
+function evCard(e, hq){
   const time = e.allDay? '終日' : e.startAt.slice(11,16);
   const lesson = e.source==='timetable';
   // 授業は時間割から導いたものなので、ここからは編集させない（時間割タブで直す）。
@@ -1414,14 +1514,26 @@ function evCard(e){
       ${e.repeat?'<span class="chip blue">繰り返し</span>':''}
       <span class="chip blue">${time}</span>
     </div>
-    <div class="title-row"><div class="item-title">${esc(e.title)}</div></div>
-    ${e.description? `<div class="item-sub">${esc(e.description)}</div>`:''}
+    <div class="title-row"><div class="item-title">${escHighlight(e.title,hq)}</div></div>
+    ${e.description? `<div class="item-sub">${escHighlight(e.description,hq)}</div>`:''}
   </div>`;
 }
 function emptyState(msg){
   return `<div class="empty-state">${ICONS.cal}<p>${msg}</p></div>`;
 }
 function esc(s){ return (s||'').replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+// esc() した後の文字列に対してハイライトをかける。query は esc() 済みの文字列と
+// 比較できるよう同じくescしてから、正規表現の特殊文字だけ追加でエスケープする。
+function escHighlight(s, query){
+  const escaped = esc(s);
+  // taskCard/evCard は Array#map(taskCard) の形でも呼ばれ、そのときは配列の
+  // index が second arg に来る。文字列以外は「クエリ無し」として扱う。
+  const q = (typeof query==='string' ? query : '').trim();
+  if(!q) return escaped;
+  const safe = esc(q).replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+  if(!safe) return escaped;
+  return escaped.replace(new RegExp('('+safe+')', 'gi'), '<mark>$1</mark>');
+}
 
 /* ============ TIMETABLE ============ */
 const DOWS = ['月','火','水','木','金','土'];
@@ -1429,32 +1541,52 @@ function renderTimetable(){
   const periods = [1,2,3,4,5,6];
   const byCell = {};
   DB.timetable.forEach(e=>{ byCell[e.dayOfWeek+'_'+e.period]=e; });
+  const todayDow = parseDate(todayStr()).getDay(); // 時間割は曜日の型なので日付は持たない。今日の列だけ強調する。
   let rows = '';
   periods.forEach(p=>{
     rows += `<div class="tt-period">${p}</div>`;
     for(let d=1; d<=6; d++){
       const e = byCell[d+'_'+p];
+      const todayCol = d===todayDow ? ' today-col':'';
       rows += e
-        ? `<div class="tt-cell" data-edit="${d}_${p}"><b>${esc(e.subject)}</b><span>${esc(e.room)}</span></div>`
-        : `<div class="tt-cell empty" data-edit="${d}_${p}">+</div>`;
+        ? `<div class="tt-cell${todayCol}" data-edit="${d}_${p}"><b>${esc(e.subject)}</b><span>${esc(e.room)}</span></div>`
+        : `<div class="tt-cell empty${todayCol}" data-edit="${d}_${p}">+</div>`;
     }
   });
+  const todayTasks = DB.tasks.filter(t=>t.status==='OPEN' && t.dueAt===todayStr());
   return `
     <div class="tt-wrap">
       <div class="tt-grid">
-        <div></div>${DOWS.map(d=>`<div class="tt-h">${d}</div>`).join('')}
+        <div></div>${DOWS.map((d,i)=>`<div class="tt-h ${i+1===todayDow?'today-col':''}">${d}</div>`).join('')}
         ${rows}
       </div>
     </div>
+    ${todayTasks.length? `
+      <div class="section-label">今日が締切のタスク</div>
+      ${todayTasks.map(taskCard).join('')}
+    ` : ''}
     <div class="section-label">使い方</div>
     <div class="item-sub" style="line-height:1.7;">空いているマスをタップしてコマを登録。登録済みのマスをタップすると編集・削除ができます。</div>
   `;
 }
 
 /* ============ TASKS ============ */
+// 「追加順」はDB.tasksに入っている順そのもの（新しいものは配列の末尾に足される）
+// を使う。作成日時をそのまま比べられる場所がオフライン作成のタスクには無いので、
+// 一番素直で確実な近似がこれだった。
+function sortTasks(list, mode){
+  if(mode==='project') return [...list].sort((a,b)=>{
+    const pa = (DB.projects.find(p=>p.id===a.projectId)||{}).name || '';
+    const pb = (DB.projects.find(p=>p.id===b.projectId)||{}).name || '';
+    return pa.localeCompare(pb,'ja') || (a.dueAt||'').localeCompare(b.dueAt||'');
+  });
+  if(mode==='created') return list;
+  return [...list].sort((a,b)=>(a.dueAt||'').localeCompare(b.dueAt||''));
+}
 function renderTasks(){
   const focus = !!sess.taskFocus;
-  let open = DB.tasks.filter(t=>t.status==='OPEN').sort((a,b)=>(a.dueAt||'').localeCompare(b.dueAt||''));
+  const sortMode = sess.taskSort || 'due';
+  let open = sortTasks(DB.tasks.filter(t=>t.status==='OPEN'), sortMode);
   let done = DB.tasks.filter(t=>t.status==='DONE');
   const doneToday = DB.tasks.some(t=>t.status==='DONE' && t.dueAt<=todayStr());
   if(focus){
@@ -1462,9 +1594,16 @@ function renderTasks(){
     done = [];
   }
   const filterRow = `
-    <div class="filter-row">
-      <button class="filter-chip ${!focus?'on':''}" data-taskfocus="off">すべて</button>
-      <button class="filter-chip ${focus?'on':''}" data-taskfocus="on">今日やること</button>
+    <div class="filter-row" style="justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+      <div style="display:flex; gap:6px;">
+        <button class="filter-chip ${!focus?'on':''}" data-taskfocus="off">すべて</button>
+        <button class="filter-chip ${focus?'on':''}" data-taskfocus="on">今日やること</button>
+      </div>
+      <select id="taskSortSelect" style="width:auto; padding:8px 10px; font-size:13px;">
+        <option value="due" ${sortMode==='due'?'selected':''}>締切順</option>
+        <option value="created" ${sortMode==='created'?'selected':''}>追加順</option>
+        <option value="project" ${sortMode==='project'?'selected':''}>プロジェクト別</option>
+      </select>
     </div>`;
   // 今日の分をやり切った時だけ、素っ気ない空欄より一言添える。
   const focusEmpty = (focus && doneToday)
@@ -1478,18 +1617,19 @@ function renderTasks(){
     <button class="fab" id="addTaskFab">${ICONS.plus}</button>
   `;
 }
-function taskCard(t){
+function taskCard(t, hq){
   const isDone = t.status==='DONE';
   const proj = t.projectId? DB.projects.find(p=>p.id===t.projectId) : null;
   const overdue = !isDone && t.dueAt && t.dueAt < todayStr();
-  return `<div class="card ${isDone?'done':''} ${overdue?'overdue':''} ${t.ai?'ai':''}" data-task="${t.id}">
+  const color = LOCAL_COLORS[t.id];
+  return `<div class="card ${isDone?'done':''} ${overdue?'overdue':''} ${t.ai?'ai':''}" data-task="${t.id}"${color?` style="--card-accent:${color}"`:''}>
     <div class="title-row">
       <div style="display:flex; gap:10px; align-items:flex-start; flex:1;">
         <div class="check ${isDone?'on':''}" data-toggle="${t.id}">${isDone? '済':''}</div>
         <div style="flex:1;">
           <div class="label-row">${t.ai?'<span class="chip ai">AI取込</span>':''}${proj?`<span class="chip proj">${esc(proj.name)}</span>`:''}${overdue?'<span class="chip late">期限切れ</span>':''}</div>
-          <div class="item-title ${isDone?'strike':''}">${esc(t.title)}</div>
-          ${t.description? `<div class="item-sub">${esc(t.description)}</div>`:''}
+          <div class="item-title ${isDone?'strike':''}">${escHighlight(t.title,hq)}</div>
+          ${t.description? `<div class="item-sub">${escHighlight(t.description,hq)}</div>`:''}
           ${t.dueAt? `<div class="item-sub ${overdue?'late-text':''}">期限：${fmtDate(t.dueAt)}</div>`:''}
         </div>
       </div>
@@ -1529,8 +1669,8 @@ function renderSearch(){
     return head + emptyState(`「${esc(raw.trim())}」に一致するものはありません`);
   }
   return head
-    + (tasks.length ? `<div class="section-label">タスク（${tasks.length}）</div>` + tasks.map(taskCard).join('') : '')
-    + (events.length? `<div class="section-label">予定（${events.length}）</div>` + events.map(evCard).join('') : '');
+    + (tasks.length ? `<div class="section-label">タスク（${tasks.length}）</div>` + tasks.map(t=>taskCard(t,raw.trim())).join('') : '')
+    + (events.length? `<div class="section-label">予定（${events.length}）</div>` + events.map(e=>evCard(e,raw.trim())).join('') : '');
 }
 
 /* ============ PROJECTS ============ */
@@ -1587,12 +1727,18 @@ function renderPrint(){
       <div class="privacy-note">この画像は外部のAIサービスには送信されません。サーバー上のローカルモデル（Ollama）だけで解析します。</div>
       <input type="file" id="fileInput" accept="image/*" style="display:none;">
       <div class="section-label">読み取ったプリント</div>
-      ${(sess.prints||[]).length
-        ? `<div class="print-grid">` + sess.prints.map(p=>`
+      ${(sess.prints||[]).length ? `
+        <input type="text" id="printSearchInput" placeholder="ファイル名で絞り込み" value="${esc(sess.printQuery||'')}" autocomplete="off" style="margin-bottom:10px;">
+        ${(()=>{
+          const q = (sess.printQuery||'').trim().toLowerCase();
+          const filtered = q ? sess.prints.filter(p=>(p.filename||'').toLowerCase().includes(q)) : sess.prints;
+          if(!filtered.length) return emptyState(q ? `「${esc(sess.printQuery.trim())}」に一致するプリントはありません` : 'まだ読み取ったプリントがありません');
+          return `<div class="print-grid">` + filtered.map(p=>`
             <button class="print-thumb" data-print="${p.id}" title="${esc(p.filename||'')}">
               <img data-src="${p.id}" alt="${esc(p.filename||'プリント')}">
-            </button>`).join('') + `</div>`
-        : emptyState('まだ読み取ったプリントがありません')}
+            </button>`).join('') + `</div>`;
+        })()}
+      ` : emptyState('まだ読み取ったプリントがありません')}
     `;
   }
   if(flow.step==='preview'){
@@ -1962,6 +2108,7 @@ function modalContent(){
           ${DB.projects.map(p=>`<option value="${p.id}" ${presetProjectId===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}
         </select>
       </div>
+      ${t.id? `<div class="field"><label class="f">色（この端末だけの目印）</label>${colorDots(t.id)}</div>`:''}
       <button class="btn hanko" id="m-save">保存する</button>
       ${t.id? `<button class="btn ghost" style="margin-top:8px;" id="m-del">削除する</button>`:''}
     `;
@@ -2142,6 +2289,8 @@ function bindScreen(){
   document.querySelectorAll('[data-taskfocus]').forEach(el=>{
     el.onclick = ()=>{ sess.taskFocus = el.dataset.taskfocus==='on'; render(); };
   });
+  const taskSortSelect = document.getElementById('taskSortSelect');
+  if(taskSortSelect) taskSortSelect.onchange = ()=>{ sess.taskSort = taskSortSelect.value; render(); };
   document.querySelectorAll('[data-toggle]').forEach(el=>{
     el.onclick = async (ev)=>{
       ev.stopPropagation();          // カードを開かずにチェックだけ切り替える
@@ -2183,6 +2332,18 @@ function bindScreen(){
     // 日本語入力の変換中に再描画すると入力が壊れるので、確定するまで待つ。
     searchInput.oninput = (ev)=>{ if(!ev.isComposing) apply(); };
     searchInput.addEventListener('compositionend', apply);
+  }
+  const printSearchInput = document.getElementById('printSearchInput');
+  if(printSearchInput){
+    const apply = ()=>{
+      sess.printQuery = printSearchInput.value;
+      const pos = printSearchInput.selectionStart;
+      render();
+      const next = document.getElementById('printSearchInput');
+      if(next){ next.focus(); next.setSelectionRange(pos,pos); }
+    };
+    printSearchInput.oninput = (ev)=>{ if(!ev.isComposing) apply(); };
+    printSearchInput.addEventListener('compositionend', apply);
   }
   document.querySelectorAll('[data-filter]').forEach(el=>{
     el.onclick = ()=>{ sess.searchFilter = el.dataset.filter; render(); };
@@ -2396,6 +2557,14 @@ function bindModal(){
   const delBtn = document.getElementById('m-del');
   const closeBtn = document.getElementById('m-close');
   if(closeBtn) closeBtn.onclick = ()=>{ sess.modal=null; render(); };
+
+  document.querySelectorAll('[data-colorpick]').forEach(el=>{
+    el.onclick = ()=>{
+      const id = el.dataset.colorpick, color = el.dataset.color;
+      if(color) LOCAL_COLORS[id] = color; else delete LOCAL_COLORS[id];
+      saveLocalColors(); renderModal();
+    };
+  });
 
   // 終日にしたら時刻欄は要らないので隠す
   const allDayBox = document.getElementById('m-allday');
@@ -2651,6 +2820,7 @@ function bindModal(){
 /* ============ INIT ============ */
 (async function init(){
   await loadAll();
+  loadLocalColors();
   sess.calView = PREFS.defaultView;
   await probeServer();
   // 前回のトークンがまだ生きていればそのまま入る。切れていればログイン画面へ。
